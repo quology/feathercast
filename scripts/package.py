@@ -67,6 +67,11 @@ def main():
     qt_licenses = Path(manifest["qt_prefix"]) / "LICENSES"
     if qt_licenses.is_dir():
         shutil.copytree(qt_licenses, notices / "Qt")
+    source_licenses = ROOT / f'work/deps/qt-source-licenses/qtbase-everywhere-src-{manifest["qt"]}/LICENSES'
+    if not source_licenses.is_dir():
+        raise SystemExit("Qt license inventory missing: rerun scripts/bootstrap.py before packaging.")
+    shutil.copytree(source_licenses, notices / "Qt-source-licenses", dirs_exist_ok=True)
+    shutil.copytree(Path(manifest["qt_prefix"]) / "sbom", notices / "Qt-SPDX")
     archive_path = ROOT / "outputs" / f"{name}.zip"
     archive_path.parent.mkdir(exist_ok=True)
     with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:

@@ -16,6 +16,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 DEPS = ROOT / "work/deps"
 QT_VERSION = "6.8.3"
+QT_SOURCE_SHA256 = "56001b905601bb9023d399f3ba780d7fa940f3e4861e496a7c490331f49e0b80"
 OBS_VERSION = "33.0.0"
 OBS_SOURCE_COMMIT = "02acc6a4cf08eba4ce2eab9342c5dd305b41e9e5"
 OBS_ZIP_SHA256 = "3369a3ecd67b5669a8a08d77357f87cc786d1fba42fbbd1054d841a69f6271a7"
@@ -65,6 +66,14 @@ def main():
         run([sys.executable, "-m", "aqt", "install-qt", "windows", "desktop", QT_VERSION, "win64_mingw", "--archives", "qtbase", "qttools", "--outputdir", DEPS / "Qt"])
     if not (compiler / "g++.exe").exists():
         run([sys.executable, "-m", "aqt", "install-tool", "windows", "desktop", "tools_mingw1310", "qt.tools.win64_mingw1310", "--outputdir", DEPS / "Qt"])
+    qt_source = DEPS / f"qtbase-everywhere-src-{QT_VERSION}.tar.xz"
+    download(f"https://download.qt.io/archive/qt/6.8/{QT_VERSION}/submodules/qtbase-everywhere-src-{QT_VERSION}.tar.xz", qt_source, QT_SOURCE_SHA256)
+    qt_licenses = DEPS / "qt-source-licenses"
+    if not (qt_licenses / f"qtbase-everywhere-src-{QT_VERSION}/LICENSES").exists():
+        qt_licenses.mkdir(exist_ok=True)
+        with tarfile.open(qt_source) as package:
+            members = [entry for entry in package.getmembers() if "/LICENSES/" in entry.name]
+            package.extractall(qt_licenses, members=members, filter="data")
 
     runtime = DEPS / "obs-runtime"
     archive = DEPS / "obs-runtime.zip"
