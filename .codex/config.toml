@@ -1,0 +1,29 @@
+# Project defaults. Start a new Codex session here to load these settings.
+model = "gpt-6.1-sol"
+
+[features]
+# The installed CLI needs the current runtime to select named custom agents.
+multi_agent_v2 = true
+
+[agents]
+enabled = true
+# This excludes the primary agent. Keep every delegated task sequential.
+max_concurrent_threads_per_session = 1
+
+# Explicit role registration; paths are relative to this config file.
+# Standalone agents are also discovered by name from .codex/agents/.
+[agents.architect]
+description = "Architecture, low-level C++, libobs integration, dynamic delay, complex bugs, and performance optimization."
+config_file = "agents/architect.toml"
+
+[agents.developer]
+description = "Feature implementation, backend development, integration, debugging, and tests."
+config_file = "agents/developer.toml"
+
+[agents.ui]
+description = "Qt UI, layout, styling, and simple interface changes."
+config_file = "agents/ui.toml"
+
+[agents.simple]
+description = "Documentation, straightforward fixes, formatting, and repetitive maintenance."
+config_file = "agents/simple.toml"
