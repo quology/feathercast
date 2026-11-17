@@ -1,0 +1,33 @@
+# Engine integration handoff
+
+`include/feathercast/engine/engine.hpp` is the Qt controller API. All calls belong on the object's Qt thread. `initialize()` finds packaged `appDir/core`, then adjacent `appDir/obs`, then the build's manifest-pinned development runtime. An explicit runtime path overrides this. `defaultSettings()` supplies the supported JSON keys; `applySettings()` requires stopped outputs. The first stage intentionally uses H.264/AAC stereo, a shared encoder pair, and no B-frames.
+
+## GUI wiring
+
+- Initialize, then `loadConfiguration(absolutePath)`. Create a default scene when no configuration exists. Configuration saves are atomic with QSaveFile. Keys are separately protected by Windows DPAPI (`storeStreamKey`); never put a key into the endpoint/settings JSON or logs. The endpoint is the base server/application URL; the engine appends the protected key at start.
+- Scene methods and `addSource(scene,type,name,properties)` operate real OBS sources. Types: `desktop`, `window`, `game`, `color`, `microphone`, `desktop_audio`, `test_tone`. Use `sourceOptions(type)` for window/device/monitor choices; each entry identifies the property key and value to pass. No device capture is enabled automatically. Test tone is an explicit diagnostic source.
+- Give `attachPreview` a native HWND from a QWidget with `WA_NativeWindow`; resize through `resizePreview`. Call `attachPreview(0,0,0)` before destroying that HWND. `setPreviewEnabled` only affects display drawing.
+- Start/stop streaming, recording and replay independently. Poll `statistics()` at a modest interval and also react to `stateChanged`, `errorOccurred` and `replaySaved`. Output start is asynchronous; `relayConnected` shows actual transport connection. `saveReplay()` requests asynchronous MKV creation.
+- Set delay through `setDelayMs`. Target range is 0–300000 ms; effective delay is approximate to keyframe granularity. Increasing holds output; decreasing cuts content at a keyframe. `delayDroppedPackets` includes intentional audio/video cuts, not solely bandwidth loss.
+- `automationSnapshot()` supplies running processes, foreground/title and output state. Feed it to the portable `AutomationEngine`; dispatch returned actions to this API on the controller thread. Audio peak metering and hotkey collection are not yet populated by this backend. Do not render fictional audio levels or GPU/CPU counters.
+- `loadPlugin(absoluteDll)` validates ABI v1 and exposes actions via `pluginActions`. `invokePluginAction` dispatches them. Plugins run trusted in-process, and must be explicitly selected by the user. The example DLL action requests 90 seconds of delay.
+
+## Runtime layout
+
+Development uses the official OBS root (`bin/64bit`, `core`, `data/libobs`). Portable builds may put executable/DLLs/helpers at package root, while retaining `core`, `data/libobs`, and an existing `bin/64bit` compatibility directory. Engine startup sets process cwd to runtime `bin/64bit` because official win-capture initializes hooks through `../../core`. It restores the previous directory at shutdown. Always use absolute application/config/output paths.
+
+The helper executables `obs-ffmpeg-mux.exe`, `obs-nvenc-test.exe` and `obs-qsv-test.exe` must sit beside the frontend executable. Root CMake copies these beside built executables. Qt MinGW DLLs must be used instead of OBS's MSVC Qt DLLs. Only the explicitly loaded non-frontend module list is supported.
+
+Shutdown disconnects signal handlers, stops/releases outputs and encoders, removes scene sources from OBS 33's program canvas (which holds strong references), releases the application's scene references, and drains libobs's deferred destruction queue until idle before `obs_shutdown`. Both canvas removal and queue draining are required. A single queue drain without canvas removal left a nondeterministic double-destroy error; strengthened smoke testing caught and rejected that intermediate build.
+
+## Verified backend milestone
+
+Native Debug build succeeded with Qt 6.8.3, MinGW 13.1 and pinned OBS 33.0.0. Tests initialized D3D11 on RTX 4070, used a real color scene and generated 440 Hz audio, and simultaneously produced MKV recording, MKV replay and dynamic-delay relay output. Software x264 and hardware NVENC both passed. The delay changed 500 → 1800 → 0 ms while live.
+
+The final NVENC test sent RTMP to a local FFmpeg receiver (`127.0.0.1:19350`), then stopped cleanly. It reported relayError=0, effective delay about 811 ms at target zero with a one-second keyframe interval, and no unexpected OBS error-level messages. The receiver's EOF I/O diagnostic after publisher disconnect did not prevent a valid finalized MKV.
+
+All nine generated software/NVENC/RTMP recording/replay/relay artifacts passed full FFmpeg decode, strict per-stream DTS monotonicity, video-first-keyframe and A/V end-time checks through `scripts/validate_media.py`. Detailed local reports are `work/engine-smoke3/validation.json`, `work/engine-nvenc/validation.json`, and `work/engine-rtmp/validation.json`. After the final canvas-reference fix, `work/engine-final2` passed the strengthened software smoke with no remaining sources or error-level messages, and all three media artifacts passed the same validation. These are test artifacts, not redistributable product outputs. Smoke now fails on unexpected libobs error-level messages as well as media/state failures.
+
+## Explicit remaining limits
+
+No external Twitch/YouTube session, network-reconnect fault test, long-duration soak, visual desktop/window/game capture validation, perceptual lip-sync measurement or OBS performance comparison has been completed in this stage. Native preview implementation awaits GUI validation. Recording/replay have one stereo AAC track, fixed output resolution/FPS, and shared CBR quality. MP4 remux, splitting, disk-pressure monitoring after start, audio meters, global hotkeys, disk delay spill, richer plugin extension types and plugin unload controls remain work. The existing replay buffer has time/size settings but is OBS's implementation, not the core queue's exact memory accounting. Core delay caps bound queue payload capacity and packet count, not total process RSS.

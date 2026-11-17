@@ -145,6 +145,14 @@ void delay_concurrent_access() {
     producer.join();
     CHECK(buffer.stats().packets <= 64);
 }
+void delay_timer_jitter_does_not_accumulate() {
+    DelayBuffer buffer;
+    for (int i = 0; i < 200; ++i) CHECK(buffer.push(video(i * 10000, i == 0), i * 10000) == PushResult::Accepted);
+    int emitted = 0;
+    for (Microseconds now = 0; now <= 2'000'000; now += 11000)
+        while (buffer.pop_ready(now)) ++emitted;
+    CHECK(emitted == 200); // Per-packet reanchoring would emit only 182.
+}
 Rule process_rule(std::string id, int priority, std::string process, std::string scene) {
     Rule rule;
     rule.id = std::move(id); rule.priority = priority;
@@ -263,6 +271,7 @@ int main() {
         {"delay invalid/reconnect", delay_invalid_and_reconnect},
         {"delay timestamp property", delay_timestamp_property},
         {"delay concurrent access", delay_concurrent_access},
+        {"delay timer jitter", delay_timer_jitter_does_not_accumulate},
         {"automation priority/debounce/cooldown", automation_priority_debounce_cooldown},
         {"automation logic/override/fallback", automation_logic_override_fallback},
         {"automation actions/tie", automation_multiple_actions_and_tie},

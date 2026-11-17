@@ -145,8 +145,13 @@ std::optional<DelayedPacket> DelayBuffer::pop_ready(Microseconds now_us) {
     stats_.payload_bytes -= result.packet.data.capacity();
     stats_.effective_delay_us = now_us - head.arrival_us;
     queue_.pop_front();
-    pace_source_ = result.original_dts_us;
-    pace_wall_ = now_us;
+    // Keep a stable segment clock: resetting to every actual release time
+    // accumulates timer granularity once per audio/video packet. Reanchor only
+    // after a substantial stall (including a deliberate delay increase).
+    if (!paced_ || now_us - (pace_wall_ + result.original_dts_us - pace_source_) > 100'000) {
+        pace_source_ = result.original_dts_us;
+        pace_wall_ = now_us;
+    }
     paced_ = true;
     rebase_ = false;
     result.packet.dts_us = dts;

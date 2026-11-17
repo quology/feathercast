@@ -24,3 +24,4 @@ __pycache__/
 secrets.json
 credentials.json
 compile_commands.json
+/win-capture/
