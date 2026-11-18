@@ -17,9 +17,11 @@ Private repository `quology/feathercast`, branch `main`. Code/tooling commit `22
 - [x] Portable packaged executable and runtime-media verification, with SDK paths removed.
 - [x] Final-code CI and synchronization.
 - [x] Short matched idle process CPU/RSS measurement, with explicit limits.
-- [ ] Create and verify private development prerelease assets (coordinator).
+- [x] Create and verify private development prerelease assets (coordinator).
 - [ ] Equivalent OBS/application gaming FPS, 1% lows and frame times.
 - [ ] External platforms, visual capture/preview, AMF/QSV and long-duration validation.
 - [ ] Public redistribution/license/corresponding-source audit.
 
 Application source is frozen and verified. Coordinator owns release artifacts. Named agent spawning and Luna overrides were not exposed by the refreshed session, although the native catalog still lists Luna; documentation used a verified Sol/low fallback. Runtime model evidence is in docs/MODEL_USAGE.jsonl. No simultaneous source development; not all requested requirements are complete.
+
+Private prerelease [v0.1.0-dev.1](https://github.com/quology/feathercast/releases/tag/v0.1.0-dev.1) uses source commit `873c62c647a264401a02f0369a17e941c0a8ed04`; all nine assets are present and the downloaded portable ZIP SHA-256 was verified.
