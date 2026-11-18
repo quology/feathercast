@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -52,7 +53,8 @@ def main():
         (stage / "plugins").mkdir()
         shutil.copy2(plugins[0], stage / "plugins" / plugins[0].name)
     deploy = Path(manifest["qt_prefix"]) / "bin/windeployqt.exe"
-    subprocess.run([str(deploy), "--release" if args.configuration == "Release" else "--debug", "--compiler-runtime", "--no-translations", "--no-opengl-sw", str(stage / "FeatherCast.exe")], check=True)
+    deploy_env = dict(os.environ, PATH=str(deploy.parent) + os.pathsep + manifest["compiler_bin"] + os.pathsep + os.environ.get("PATH", ""))
+    subprocess.run([str(deploy), "--release" if args.configuration == "Release" else "--debug", "--compiler-runtime", "--no-translations", "--no-opengl-sw", str(stage / "FeatherCast.exe")], check=True, env=deploy_env)
     # windeployqt's toolchain detection is not guaranteed outside Qt Creator.
     for name_ in ("libgcc_s_seh-1.dll", "libstdc++-6.dll", "libwinpthread-1.dll"):
         shutil.copy2(Path(manifest["compiler_bin"]) / name_, stage / name_)
