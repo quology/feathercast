@@ -1,6 +1,6 @@
 # Development checkpoint
 
-Private repository `quology/feathercast`, branch `main`. Baseline `964815a` passed CI; latest macro/remux changes await final-source synchronization/CI.
+Private repository `quology/feathercast`, branch `main`. Code/tooling commit `22b0d78` passed all CI jobs; later documentation changes preserve that tested application source.
 
 - [x] Research, architecture and license strategy.
 - [x] Bounded delay, priority automation, module lifecycle and plugin action ABI.
@@ -10,14 +10,16 @@ Private repository `quology/feathercast`, branch `main`. Baseline `964815a` pass
 - [x] Qt UI, macro editor, settings, real meters and module gates.
 - [x] Windows hotkeys, DPAPI secrets, atomic persistence and plugin loading.
 - [x] MP4 remux success/decode/preservation/invalid-input cleanup.
-- [x] Debug and Release CTest, 2/2 targets; Debug UI self-test 12/12 Boolean checks.
+- [x] Debug and Release CTest, 3/3 targets; Debug UI self-test 12/12 Boolean checks.
 - [x] Local RTMP failure/reconnect injection and recovered media validation.
 - [x] Documentation of implementation and limitations.
 - [x] Final Release UI self-test: exit 0, all 12 Boolean checks and clean shutdown.
-- [ ] Portable packaged executable verification (coordinator).
-- [ ] Final-source CI/synchronization and development release creation (coordinator).
+- [x] Portable packaged executable and runtime-media verification, with SDK paths removed.
+- [x] Final-code CI and synchronization.
+- [x] Short matched idle process CPU/RSS measurement, with explicit limits.
+- [ ] Create and verify private development prerelease assets (coordinator).
 - [ ] Equivalent OBS/application gaming FPS, 1% lows and frame times.
 - [ ] External platforms, visual capture/preview, AMF/QSV and long-duration validation.
 - [ ] Public redistribution/license/corresponding-source audit.
 
-Source is frozen during packaging. Coordinator owns Git and final status/release artifacts. Current handoff uses available Sol/medium coordination; configured Luna documentation role was unavailable and is not claimed as executed. Documentation used an explicit available fallback. No simultaneous source development; not all requested requirements are complete.
+Application source is frozen and verified. Coordinator owns release artifacts. Named agent spawning and Luna overrides were not exposed by the refreshed session, although the native catalog still lists Luna; documentation used a verified Sol/low fallback. Runtime model evidence is in docs/MODEL_USAGE.jsonl. No simultaneous source development; not all requested requirements are complete.

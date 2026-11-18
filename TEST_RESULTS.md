@@ -53,9 +53,12 @@ and its three decoded media artifacts passed after that ownership fix.
 | Reconnect media | Passed | Same directory media-validation.json: recording/replay/recovered receiver MKV fully decoded, strict DTS/end-skew checks passed |
 | Baseline CI 964815a | Passed | [Run 44145255499](https://github.com/quology/feathercast/actions/runs/44145255499): Linux core, Windows Debug/Release, portable package; predates latest macro/remux changes |
 | Latest Release UI self-test | Passed, exit 0, all 12 Boolean checks | work/release-verified-20261118/results.json and stdout.log; real meter -21.9382 dBFS, native event dispatch, clean shutdown without double destruction |
-| Final-source portable package smoke | Pending coordinator update | Baseline CI package does not validate latest executable |
-| Final-source CI | Pending coordinator update | Latest changes require synchronization |
+| Portable UI without SDK paths | Passed | Packaged app exit 0, all 12 checks; six selected OBS/Qt/graphics/capture modules loaded from package paths, not the development SDK |
+| Packaged-runtime simultaneous NVENC outputs | Passed | Recording, replay and delayed FLV exit 0; all three media files decoded with valid timestamps; final delay 811.548 ms at zero target, relayError 0 |
+| Final-source CI, commit 22b0d78 | Passed | [Run 44304834193](https://github.com/quology/feathercast/actions/runs/44304834193): Linux core, Cppcheck core/example analysis, Windows Debug/Release tests and portable packaging |
 
 RTMPS tls_verify=1 is applied; no external RTMPS/Twitch/YouTube session was tested. AMF/QSV hardware, actual desktop/window/game visual capture, protected games, perceptual lip sync and long-duration stability remain unverified. Native preview is implemented, but QWidget grabs exclude its HWND and do not prove visibility.
 
-No rigorous comparable OBS gaming FPS/1% low/frame-time measurements exist; incomplete preliminary synthetic measurements are not published. Disk checking is pre-start only, without a live full-disk guarantee. CPU/GPU counters remain unavailable. Public redistribution/license/corresponding-source audit remains incomplete. See [feature status](docs/FEATURE_STATUS.md).
+The packaged-runtime media fixture was placed beside the delivered application for testing and is excluded from the release ZIP. The archive contains no development SDK or OBS frontend executable.
+
+A matched short idle CPU/RSS sample is published in [BENCHMARKS.md](docs/BENCHMARKS.md), with raw engine counters in a separate artifact. It is not a production/gaming benchmark or performance-superiority claim. No comparable gaming FPS/1% low/frame-time measurements exist. Disk checking is pre-start only, without a live full-disk guarantee. UI utilization counters remain unavailable. Public redistribution/license/corresponding-source audit remains incomplete. See [feature status](docs/FEATURE_STATUS.md).

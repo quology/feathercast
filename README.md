@@ -1,6 +1,6 @@
 # FeatherCast
 
-FeatherCast is a native Windows broadcasting application using C++20, Qt 6 and standalone libobs. No running OBS Studio instance is required. This private **0.1.0-dev development preview** is not stable v1 or full OBS feature parity.
+FeatherCast is a native Windows broadcasting application using C++20, Qt 6 and standalone libobs. No running OBS Studio instance is required. This private **0.1.0-dev.1 development preview** is not stable v1 or full OBS feature parity.
 
 ## Implemented features
 
@@ -17,7 +17,7 @@ See [feature status](docs/FEATURE_STATUS.md), [user guide](docs/USER_GUIDE.md), 
 
 Target Windows 11 x64; Qt 6.8.3, MinGW 13.1 and official OBS 33.0.0 C ABI runtime with D3D11. Official OBS DLLs may require the Microsoft Visual C++ runtime. Follow [BUILD.md](BUILD.md) for pinned dependencies, Debug/Release builds and packaging.
 
-Extract the entire portable ZIP and run `FeatherCast.exe`; keep runtime/data directories and helpers together. Final package validation is tracked in the test results. First launch opens a safe Color scene. Capture and outputs start only after explicit actions. Configure sources, output directory and stream endpoint/key before starting outputs.
+Extract the entire portable ZIP and run `FeatherCast.exe`; keep runtime/data directories and helpers together. The package passed UI and media tests without development SDK paths. First launch opens a safe Color scene. Capture and outputs start only after explicit actions. Configure sources, output directory and stream endpoint/key before starting outputs.
 
 ## Limits and license
 

@@ -17,7 +17,7 @@ Implemented features and environment-specific verification are distinct.
 | Persistence | Atomic QSaveFile JSON, 30 s autosave, layout/theme/source state; invalid config preserves scenes | DPAPI keys separate, custom config directory has isolated namespace |
 | Plugins | v1 custom actions and working 90 s delay example; module gates | No arbitrary sources/panels/conditions/hotkeys/outputs in v1; trusted in-process DLLs can crash; no Qt frontend compatibility |
 | Network | Local RTMP and receiver-stop/restart reconnect verified | RTMPS tls_verify=1 applied, external TLS/platform session untested |
-| Diagnostics | Media validation and UI self-test | CPU/GPU unavailable; no rigorous gaming FPS/1% low/frame-time comparison |
-| Delivery | Debug/Release builds and baseline CI passed | Final-source package/CI sign-off pending; no installer/stable-v1 claim; public license/source audit incomplete |
+| Diagnostics | Media validation, UI self-test and short matched idle CPU/RSS sample | UI utilization unavailable; no rigorous gaming FPS/1% low/frame-time comparison |
+| Delivery | Debug/Release tests, packaged UI/media verification and final-code CI passed | Portable development preview; no installer/stable-v1 claim; public license/source audit incomplete |
 
 See [test results](../TEST_RESULTS.md) for evidence.
