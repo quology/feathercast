@@ -2,7 +2,9 @@ name: Build and test
 on:
   push:
     branches: [main, develop, 'feature/**', 'fix/**', 'optimization/**']
+    paths: ['src/**', 'include/**', 'tests/**', 'examples/**', 'CMakeLists.txt', 'scripts/**', 'requirements-build.txt', '.github/workflows/**']
   pull_request:
+    paths: ['src/**', 'include/**', 'tests/**', 'examples/**', 'CMakeLists.txt', 'scripts/**', 'requirements-build.txt', '.github/workflows/**']
   workflow_dispatch:
 permissions:
   contents: read
@@ -49,3 +51,15 @@ jobs:
             outputs/FeatherCast-*.sha256
           if-no-files-found: error
           retention-days: 14
+  static-analysis:
+    name: Cppcheck core analysis
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install analyzer from Ubuntu repositories
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y cppcheck
+          cppcheck --version
+      - name: Analyze portable core and example plugin
+        run: cppcheck --enable=warning,performance,portability --error-exitcode=1 --std=c++20 --suppress=missingIncludeSystem -I include src/core examples

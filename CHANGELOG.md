@@ -1,16 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.1.0-dev — development preview, 18 November 2026
 
-- Added bounded encoded-packet delay with explicit keyframe cuts, timestamp rebasing,
-  pacing, memory caps and reconnect policies.
-- Added deterministic priority automation, module lifecycles and a versioned plugin ABI.
-- Added a functioning example delay action plugin and 12 passing portable core tests.
-- Added pinned local Windows dependency provisioning and verified libobs C ABI linkage.
-- Enabled sequential model routing and authenticated private GitHub synchronization.
-- Integrated real libobs D3D11 rendering, compatible shared H.264/AAC encoders,
-  MKV recording, replay output and an in-process FFmpeg packet relay.
-- Verified simultaneous outputs with software H.264 and RTX 4070 NVENC, real local
-  RTMP reception, live keyframe delay cuts, media decoding and clean shutdown.
+- Added standalone libobs/D3D11 engine, shared H.264/AAC outputs, MKV recording, replay and RTMP(S) relay.
+- Added bounded live delay, keyframe cuts, timestamp rebasing, pacing and reconnect; 13 portable core scenarios passed.
+- Added dockable Qt UI, device options, real audio peaks, settings/layout persistence, themes and module gates.
+- Added visual priority automation, ordered actions, timing/override/fallback and transactional JSON import/export; disabled application examples.
+- Added global hotkeys, DPAPI secrets and atomic settings; fixed native callback null-result handling and invalid configuration scene preservation.
+- Added asynchronous non-reencoding MP4 remux with temporary output and preservation checks.
+- Added native plugin action ABI and working 90-second delay example.
+- Verified synthetic x264/NVENC/local RTMP, receiver failure/reconnect, Debug/Release CTest and Debug UI checks.
 
-No stable application release has been published.
+Baseline CI passed. Final-source package/CI sign-off is tracked in [TEST_RESULTS.md](TEST_RESULTS.md). External platforms, visual game capture, gaming performance, full-disk safety and public license/source audit remain unverified. No stable release has been published.

@@ -1,88 +1,733 @@
 #include "feathercast/engine/engine.hpp"
-#include <QtWidgets>
+#include "feathercast/ui/automation_panel.hpp"
+#include <QCommandLineParser>
 #include <QJsonDocument>
 #include <QSaveFile>
-#include <QCommandLineParser>
+#include <QtWidgets>
 using feathercast::engine::Engine;
+static QString darkStyle;
 
 class Preview : public QWidget {
 public:
-    Engine *engine;
-    explicit Preview(Engine *e):engine(e) { setAttribute(Qt::WA_NativeWindow); setMinimumSize(320,180); setStyleSheet("background:#111318;"); }
-    void resizeEvent(QResizeEvent *event) override { QWidget::resizeEvent(event); engine->resizePreview(width(),height()); }
+  Engine *engine;
+  explicit Preview(Engine *e) : engine(e) {
+    setAttribute(Qt::WA_NativeWindow);
+    setMinimumSize(320, 180);
+    setStyleSheet("background:#111318;");
+  }
+  void resizeEvent(QResizeEvent *event) override {
+    QWidget::resizeEvent(event);
+    engine->resizePreview(width(), height());
+  }
 };
 class Window : public QMainWindow {
-    Engine engine;
-    QString dir, config;
-    Preview *preview{};
-    QListWidget *scenes{}, *sources{};
-    QLabel *stats{}, *delayStatus{};
-    QPushButton *stream{}, *record{}, *replay{}, *save{};
-    QSpinBox *delay{};
-    QTimer timer;
-    bool refreshing=false, smoke=false;
-    QHash<QString,QPair<int,bool>> audio;
-    QHash<QString,bool> visibility;
-    void saveConfig() { engine.saveConfiguration(config); QSettings s(dir+"/ui.ini",QSettings::IniFormat); s.setValue("geometry",saveGeometry()); s.setValue("state",saveState()); for(auto it=visibility.cbegin();it!=visibility.cend();++it) s.setValue("visibility/"+QString::fromLatin1(it.key().toUtf8().toBase64(QByteArray::Base64UrlEncoding)),it.value()); for(auto it=audio.cbegin();it!=audio.cend();++it) { auto key=QString::fromLatin1(it.key().toUtf8().toBase64(QByteArray::Base64UrlEncoding)); s.setValue("audio/"+key+"/volume",it.value().first); s.setValue("audio/"+key+"/muted",it.value().second); } }
-    QDockWidget *dock(const QString &title, QWidget *widget, Qt::DockWidgetArea area) { auto d=new QDockWidget(title,this); d->setObjectName(title); d->setWidget(widget); addDockWidget(area,d); return d; }
-    QPushButton *button(const QString &text, QBoxLayout *layout, const std::function<void()> &fn) { auto b=new QPushButton(text); layout->addWidget(b); connect(b,&QPushButton::clicked,this,fn); return b; }
-    void refreshScenes() {
-        refreshing=true; QString current=engine.currentScene(); scenes->clear(); scenes->addItems(engine.scenes()); auto found=scenes->findItems(current,Qt::MatchExactly); if(!found.empty()) scenes->setCurrentItem(found.first());
-        sources->clear(); for(auto v:engine.sources(current)) { auto o=v.toObject(); auto item=new QListWidgetItem(o["name"].toString(),sources); item->setData(Qt::UserRole,o["type"].toString()); item->setFlags(item->flags()|Qt::ItemIsUserCheckable); auto id=current+"/"+item->text(); item->setCheckState(visibility.value(id,true)?Qt::Checked:Qt::Unchecked); engine.setSourceVisible(current,item->text(),item->checkState()==Qt::Checked); }
-        refreshing=false;
+  Engine engine;
+  QString dir, config;
+  Preview *preview{};
+  QListWidget *scenes{}, *sources{};
+  QLabel *stats{}, *delayStatus{}, *meters{};
+  QPushButton *stream{}, *record{}, *replay{}, *save{};
+  QSpinBox *delay{};
+  QTimer timer;
+  feathercast::ui::AutomationPanel *automationPanel{};
+  int saveTicks = 0;
+  QProcess remuxProcess;
+  QString remuxTemporary;
+  bool refreshing = false, smoke = false;
+  QHash<QString, QPair<int, bool>> audio;
+  QHash<QString, bool> visibility;
+  void saveConfig() {
+    engine.saveConfiguration(config);
+    QSettings s(dir + "/ui.ini", QSettings::IniFormat);
+    s.setValue("geometry", saveGeometry());
+    s.setValue("state", saveState());
+    for (auto it = visibility.cbegin(); it != visibility.cend(); ++it)
+      s.setValue("visibility/" + QString::fromLatin1(it.key().toUtf8().toBase64(
+                                     QByteArray::Base64UrlEncoding)),
+                 it.value());
+    for (auto it = audio.cbegin(); it != audio.cend(); ++it) {
+      auto key = QString::fromLatin1(
+          it.key().toUtf8().toBase64(QByteArray::Base64UrlEncoding));
+      s.setValue("audio/" + key + "/volume", it.value().first);
+      s.setValue("audio/" + key + "/muted", it.value().second);
     }
-    void addSource() {
-        if(engine.currentScene().isEmpty()) return;
-        QDialog d(this); d.setWindowTitle("Add source"); QFormLayout form(&d); QComboBox type, option; QLineEdit name;
-        const QList<QPair<QString,QString>> types={{"Display capture","desktop"},{"Window capture","window"},{"Game capture","game"},{"Microphone","microphone"},{"Desktop audio","desktop_audio"},{"Color","color"},{"Test tone","test_tone"}};
-        for(auto t:types) type.addItem(t.first,t.second); form.addRow("Type",&type); form.addRow("Name",&name); form.addRow("Device / target",&option);
-        auto update=[&]{option.clear(); for(auto v:engine.sourceOptions(type.currentData().toString())) {auto o=v.toObject(); option.addItem(o["name"].toString(),o.toVariantMap());} name.setText(type.currentText());}; connect(&type,&QComboBox::currentIndexChanged,&d,update); update();
-        QDialogButtonBox buttons(QDialogButtonBox::Ok|QDialogButtonBox::Cancel); form.addRow(&buttons); connect(&buttons,&QDialogButtonBox::accepted,&d,&QDialog::accept); connect(&buttons,&QDialogButtonBox::rejected,&d,&QDialog::reject);
-        if(d.exec()==QDialog::Accepted) {QJsonObject p; auto o=option.currentData().toMap(); if(!o.isEmpty()) p[o["property"].toString()]=QJsonValue::fromVariant(o["value"]); engine.addSource(engine.currentScene(),type.currentData().toString(),name.text(),p);}
+  }
+  QDockWidget *dock(const QString &title, QWidget *widget,
+                    Qt::DockWidgetArea area) {
+    auto d = new QDockWidget(title, this);
+    d->setObjectName(title);
+    d->setWidget(widget);
+    addDockWidget(area, d);
+    return d;
+  }
+  QPushButton *button(const QString &text, QBoxLayout *layout,
+                      const std::function<void()> &fn) {
+    auto b = new QPushButton(text);
+    layout->addWidget(b);
+    connect(b, &QPushButton::clicked, this, fn);
+    return b;
+  }
+  void refreshScenes() {
+    refreshing = true;
+    QString current = engine.currentScene();
+    scenes->clear();
+    scenes->addItems(engine.scenes());
+    auto found = scenes->findItems(current, Qt::MatchExactly);
+    if (!found.empty())
+      scenes->setCurrentItem(found.first());
+    sources->clear();
+    for (auto v : engine.sources(current)) {
+      auto o = v.toObject();
+      auto item = new QListWidgetItem(o["name"].toString(), sources);
+      item->setData(Qt::UserRole, o["type"].toString());
+      item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+      auto id = current + "/" + item->text();
+      item->setCheckState(visibility.value(id, true) ? Qt::Checked
+                                                     : Qt::Unchecked);
+      engine.setSourceVisible(current, item->text(),
+                              item->checkState() == Qt::Checked);
     }
-    void audioDialog() {
-        auto item=sources->currentItem(); if(!item) return; QString name=item->text(); auto state=audio.value(name,{100,false}); QDialog d(this); d.setWindowTitle("Source audio — "+name); QFormLayout form(&d); QSlider volume(Qt::Horizontal); volume.setRange(0,200); volume.setValue(state.first); QCheckBox mute("Mute"); mute.setChecked(state.second); form.addRow("Volume (%)",&volume); form.addRow(&mute); QLabel note("Audio levels are unavailable in this version."); form.addRow(&note); QDialogButtonBox box(QDialogButtonBox::Close); form.addRow(&box); auto apply=[&]{audio[name]={volume.value(),mute.isChecked()}; engine.setSourceAudio(name,volume.value()/100.0,mute.isChecked());}; connect(&volume,&QSlider::valueChanged,&d,apply); connect(&mute,&QCheckBox::toggled,&d,apply); connect(&box,&QDialogButtonBox::rejected,&d,&QDialog::reject); d.exec();
+    refreshing = false;
+  }
+  void addSource() {
+    if (engine.currentScene().isEmpty())
+      return;
+    QDialog d(this);
+    d.setWindowTitle("Add source");
+    QFormLayout form(&d);
+    QComboBox type, option;
+    QLineEdit name;
+    const QList<QPair<QString, QString>> types = {
+        {"Display capture", "desktop"},     {"Window capture", "window"},
+        {"Game capture", "game"},           {"Microphone", "microphone"},
+        {"Desktop audio", "desktop_audio"}, {"Color", "color"},
+        {"Test tone", "test_tone"}};
+    for (auto t : types)
+      type.addItem(t.first, t.second);
+    form.addRow("Type", &type);
+    form.addRow("Name", &name);
+    form.addRow("Device / target", &option);
+    auto update = [&] {
+      option.clear();
+      for (auto v : engine.sourceOptions(type.currentData().toString())) {
+        auto o = v.toObject();
+        option.addItem(o["name"].toString(), o.toVariantMap());
+      }
+      name.setText(type.currentText());
+    };
+    connect(&type, &QComboBox::currentIndexChanged, &d, update);
+    update();
+    QDialogButtonBox buttons(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+    form.addRow(&buttons);
+    connect(&buttons, &QDialogButtonBox::accepted, &d, &QDialog::accept);
+    connect(&buttons, &QDialogButtonBox::rejected, &d, &QDialog::reject);
+    if (d.exec() == QDialog::Accepted) {
+      QJsonObject p;
+      auto o = option.currentData().toMap();
+      if (!o.isEmpty())
+        p[o["property"].toString()] = QJsonValue::fromVariant(o["value"]);
+      engine.addSource(engine.currentScene(), type.currentData().toString(),
+                       name.text(), p);
     }
-    void updateStats() {auto s=engine.statistics(); bool a=s["streaming"].toBool(), b=s["recording"].toBool(), c=s["replay"].toBool(); stream->setText(a?"Stop streaming":"Start streaming"); record->setText(b?"Stop recording":"Start recording"); replay->setText(c?"Stop replay buffer":"Start replay buffer"); save->setEnabled(c); QString transport=!a?"Stopped":s["relayConnected"].toBool()?"Connected":"Starting / reconnecting";
-        stats->setText(QString("Stream: %1\nRecording: %2 · Replay: %3\nFPS: %4 · Render: %5 ms\nRender lag: %6 frames\nMemory: %7 MiB · CPU/GPU: unavailable\nStream: %8 bytes · Recording: %9 bytes").arg(transport,b?"On":"Off",c?"On":"Off").arg(s["fps"].toDouble(),0,'f',1).arg(s["renderMs"].toDouble(),0,'f',1).arg(s["renderSkippedFrames"].toDouble(),0,'f',0).arg(s["memoryMiB"].toDouble(),0,'f',1).arg(s["streamBytes"].toDouble(),0,'f',0).arg(s["recordingBytes"].toDouble(),0,'f',0));
-        delayStatus->setText(QString("Target %1 s · Effective %2 s\nBuffer %3 MiB · Dropped/cut packets %4").arg(s["targetDelayMs"].toDouble()/1000,0,'f',1).arg(s["effectiveDelayMs"].toDouble()/1000,0,'f',1).arg(s["delayBytes"].toDouble()/1048576,0,'f',1).arg(s["delayDroppedPackets"].toDouble(),0,'f',0)); }
-    void settingsDialog();
+  }
+  void audioDialog() {
+    auto item = sources->currentItem();
+    if (!item)
+      return;
+    QString name = item->text();
+    auto state = audio.value(name, {100, false});
+    QDialog d(this);
+    d.setWindowTitle("Source audio — " + name);
+    QFormLayout form(&d);
+    QSlider volume(Qt::Horizontal);
+    volume.setRange(0, 200);
+    volume.setValue(state.first);
+    QCheckBox mute("Mute");
+    mute.setChecked(state.second);
+    form.addRow("Volume (%)", &volume);
+    form.addRow(&mute);
+    QLabel note("Live source peak levels are shown in the Audio meters dock.");
+    form.addRow(&note);
+    QDialogButtonBox box(QDialogButtonBox::Close);
+    form.addRow(&box);
+    auto apply = [&] {
+      audio[name] = {volume.value(), mute.isChecked()};
+      engine.setSourceAudio(name, volume.value() / 100.0, mute.isChecked());
+    };
+    connect(&volume, &QSlider::valueChanged, &d, apply);
+    connect(&mute, &QCheckBox::toggled, &d, apply);
+    connect(&box, &QDialogButtonBox::rejected, &d, &QDialog::reject);
+    d.exec();
+  }
+  void updateStats() {
+    auto s = engine.statistics();
+    QStringList levels;
+    auto peaks = s["audioPeaksDb"].toObject();
+    for (auto it = peaks.begin(); it != peaks.end(); ++it)
+      levels << QString("%1: %2 dBFS")
+                    .arg(it.key())
+                    .arg(it.value().toDouble(), 0, 'f', 1);
+    meters->setText(
+        levels.isEmpty()
+            ? "Add a microphone or desktop audio source to see live levels."
+            : levels.join("\n"));
+    bool a = s["streaming"].toBool(), b = s["recording"].toBool(),
+         c = s["replay"].toBool();
+    stream->setText(a ? "Stop streaming" : "Start streaming");
+    record->setText(b ? "Stop recording" : "Start recording");
+    replay->setText(c ? "Stop replay buffer" : "Start replay buffer");
+    replay->setEnabled(engine.settings()["replayEnabled"].toBool());
+    save->setEnabled(c && engine.settings()["replayEnabled"].toBool());
+    QString transport = !a ? "Stopped"
+                        : s["relayConnected"].toBool()
+                            ? "Connected"
+                            : "Starting / reconnecting";
+    stats->setText(
+        QString("Stream: %1\nRecording: %2 · Replay: %3\nFPS: %4 · Render: %5 "
+                "ms\nRender lag: %6 frames\nMemory: %7 MiB · CPU/GPU: "
+                "unavailable\nStream: %8 bytes · Recording: %9 bytes")
+            .arg(transport, b ? "On" : "Off", c ? "On" : "Off")
+            .arg(s["fps"].toDouble(), 0, 'f', 1)
+            .arg(s["renderMs"].toDouble(), 0, 'f', 1)
+            .arg(s["renderSkippedFrames"].toDouble(), 0, 'f', 0)
+            .arg(s["memoryMiB"].toDouble(), 0, 'f', 1)
+            .arg(s["streamBytes"].toDouble(), 0, 'f', 0)
+            .arg(s["recordingBytes"].toDouble(), 0, 'f', 0));
+    delayStatus->setText(
+        QString("Target %1 s · Effective %2 s\nBuffer %3 MiB · Dropped/cut "
+                "packets %4")
+            .arg(s["targetDelayMs"].toDouble() / 1000, 0, 'f', 1)
+            .arg(s["effectiveDelayMs"].toDouble() / 1000, 0, 'f', 1)
+            .arg(s["delayBytes"].toDouble() / 1048576, 0, 'f', 1)
+            .arg(s["delayDroppedPackets"].toDouble(), 0, 'f', 0));
+  }
+  void remuxDialog() {
+    if (remuxProcess.state() != QProcess::NotRunning) {
+      statusBar()->showMessage("A remux is already running", 5000);
+      return;
+    }
+    auto input = QFileDialog::getOpenFileName(
+        this, "Choose completed MKV recording",
+        engine.settings()["outputDirectory"].toString(),
+        "Matroska recordings (*.mkv)");
+    if (input.isEmpty())
+      return;
+    auto output = QFileDialog::getSaveFileName(
+        this, "Save remuxed MP4",
+        QFileInfo(input).absolutePath() + "/" +
+            QFileInfo(input).completeBaseName() + ".mp4",
+        "MP4 (*.mp4)");
+    if (output.isEmpty())
+      return;
+    if (QFileInfo::exists(output)) {
+      QMessageBox::warning(
+          this, "Remux",
+          "Choose a new output filename. Existing files are preserved.");
+      return;
+    }
+    if (engine.statistics()["recording"].toBool()) {
+      QMessageBox::warning(this, "Remux",
+                           "Stop recording before remuxing completed files.");
+      return;
+    }
+    remuxTemporary =
+        output + "." + QUuid::createUuid().toString(QUuid::Id128) + ".partial";
+    remuxProcess.start(QCoreApplication::applicationDirPath() +
+                           "/feathercast_remux.exe",
+                       {QFileInfo(input).absoluteFilePath(),
+                        QFileInfo(output).absoluteFilePath(), remuxTemporary});
+    statusBar()->showMessage("Remuxing MKV to MP4… Original MKV is preserved.");
+  }
+  void settingsDialog();
+
 public:
-    Window(QString path,bool isSmoke):dir(std::move(path)),smoke(isSmoke) {
-        QDir().mkpath(dir); config=dir+"/engine.json"; setWindowTitle("FeatherCast"); resize(1220,760); setDockOptions(AllowNestedDocks|AllowTabbedDocks|AnimatedDocks);
-        connect(&engine,&Engine::errorOccurred,this,[this](const QString &m){statusBar()->showMessage(m,12000); if(!smoke) QMessageBox::warning(this,"FeatherCast",m);}); connect(&engine,&Engine::replaySaved,this,[this](const QString &p){statusBar()->showMessage("Replay saved: "+p,10000);});
-        if(!engine.initialize()) {QTimer::singleShot(0,this,&QWidget::close); return;} if(QFileInfo::exists(config)) engine.loadConfiguration(config); if(engine.scenes().isEmpty()){engine.addScene("Scene"); engine.addSource("Scene","color","Background");}
-        preview=new Preview(&engine); setCentralWidget(preview);
-        auto sceneBox=new QWidget; auto sl=new QVBoxLayout(sceneBox); scenes=new QListWidget; sl->addWidget(scenes); auto sr=new QHBoxLayout; sl->addLayout(sr); button("+",sr,[this]{bool ok=false; auto n=QInputDialog::getText(this,"Add scene","Name",QLineEdit::Normal,{},&ok); if(ok) engine.addScene(n);}); button("−",sr,[this]{if(scenes->currentItem()) engine.removeScene(scenes->currentItem()->text());}); dock("Scenes",sceneBox,Qt::LeftDockWidgetArea);
-        auto sourceBox=new QWidget; auto sol=new QVBoxLayout(sourceBox); sources=new QListWidget; sol->addWidget(sources); auto sor=new QHBoxLayout; sol->addLayout(sor); button("+",sor,[this]{addSource();}); button("−",sor,[this]{if(sources->currentItem()) engine.removeSource(engine.currentScene(),sources->currentItem()->text());}); button("Audio…",sor,[this]{audioDialog();}); dock("Sources",sourceBox,Qt::LeftDockWidgetArea);
-        connect(scenes,&QListWidget::currentTextChanged,this,[this](const QString &s){if(!refreshing&&!s.isEmpty()) engine.selectScene(s);}); connect(sources,&QListWidget::itemChanged,this,[this](QListWidgetItem *i){if(!refreshing) { visibility[engine.currentScene()+"/"+i->text()]=i->checkState()==Qt::Checked; engine.setSourceVisible(engine.currentScene(),i->text(),i->checkState()==Qt::Checked); }}); connect(&engine,&Engine::scenesChanged,this,[this]{refreshScenes();});
-        auto controls=new QWidget; auto cl=new QVBoxLayout(controls); stream=button("Start streaming",cl,[this]{engine.statistics()["streaming"].toBool()?engine.stopStreaming():void(engine.startStreaming());}); record=button("Start recording",cl,[this]{engine.statistics()["recording"].toBool()?engine.stopRecording():void(engine.startRecording());}); replay=button("Start replay buffer",cl,[this]{engine.statistics()["replay"].toBool()?engine.stopReplay():void(engine.startReplay());}); save=button("Save replay",cl,[this]{engine.saveReplay();}); button("Settings…",cl,[this]{settingsDialog();}); cl->addStretch(); dock("Controls",controls,Qt::RightDockWidgetArea);
-        auto dw=new QWidget; auto dl=new QVBoxLayout(dw); auto presets=new QComboBox; for(int n:{0,15,30,60,90,120}) presets->addItem(QString::number(n)+" s",n); presets->addItem("Custom",-1); dl->addWidget(presets); delay=new QSpinBox; delay->setRange(0,300); delay->setSuffix(" s"); delay->setValue(engine.settings()["delayMs"].toInt()/1000); dl->addWidget(delay); button("Apply delay",dl,[this]{engine.setDelayMs(delay->value()*1000);}); connect(presets,&QComboBox::currentIndexChanged,this,[this,presets]{if(presets->currentData().toInt()>=0) delay->setValue(presets->currentData().toInt());}); delayStatus=new QLabel; delayStatus->setWordWrap(true); dl->addWidget(delayStatus); auto warning=new QLabel("Increasing delay holds output; decreasing it cuts content. Long holds may disconnect the ingest server."); warning->setWordWrap(true); dl->addWidget(warning); dock("Stream delay",dw,Qt::RightDockWidgetArea);
-        stats=new QLabel; stats->setWordWrap(true); stats->setMargin(8); dock("Statistics",stats,Qt::BottomDockWidgetArea);
-        auto view=menuBar()->addMenu("View"); for(auto d:findChildren<QDockWidget*>()) view->addAction(d->toggleViewAction()); menuBar()->addAction("Settings…",this,[this]{settingsDialog();});
-        QSettings ui(dir+"/ui.ini",QSettings::IniFormat); ui.beginGroup("visibility"); for(const auto &k:ui.childKeys()) visibility[QString::fromUtf8(QByteArray::fromBase64(k.toLatin1(),QByteArray::Base64UrlEncoding))]=ui.value(k).toBool(); ui.endGroup(); ui.beginGroup("audio"); for(const auto &k:ui.childGroups()) { ui.beginGroup(k); auto name=QString::fromUtf8(QByteArray::fromBase64(k.toLatin1(),QByteArray::Base64UrlEncoding)); audio[name]={ui.value("volume",100).toInt(),ui.value("muted",false).toBool()}; engine.setSourceAudio(name,audio[name].first/100.0,audio[name].second); ui.endGroup(); } ui.endGroup(); refreshScenes(); restoreGeometry(ui.value("geometry").toByteArray()); restoreState(ui.value("state").toByteArray()); connect(&timer,&QTimer::timeout,this,[this]{updateStats();}); timer.start(1000); updateStats(); QTimer::singleShot(0,this,[this]{if(preview) engine.attachPreview(preview->winId(),preview->width(),preview->height());});
+  Window(QString path, bool isSmoke) : dir(std::move(path)), smoke(isSmoke) {
+    QDir().mkpath(dir);
+    config = dir + "/engine.json";
+    setWindowTitle("FeatherCast");
+    resize(1220, 760);
+    setDockOptions(AllowNestedDocks | AllowTabbedDocks | AnimatedDocks);
+    connect(&remuxProcess, &QProcess::finished, this,
+            [this](int code, QProcess::ExitStatus state) {
+              QFile::remove(remuxTemporary);
+              statusBar()->showMessage(
+                  code == 0 && state == QProcess::NormalExit
+                      ? "MP4 remux completed; original MKV preserved"
+                      : "Remux failed or cancelled; original MKV preserved",
+                  10000);
+            });
+    connect(&remuxProcess, &QProcess::errorOccurred, this,
+            [this](QProcess::ProcessError) {
+              QFile::remove(remuxTemporary);
+              statusBar()->showMessage(
+                  "Remux helper failed to start or exited unexpectedly", 10000);
+            });
+    connect(&engine, &Engine::errorOccurred, this, [this](const QString &m) {
+      statusBar()->showMessage(m, 12000);
+      if (!smoke)
+        QMessageBox::warning(this, "FeatherCast", m);
+    });
+    connect(&engine, &Engine::replaySaved, this, [this](const QString &p) {
+      statusBar()->showMessage("Replay saved: " + p, 10000);
+    });
+    if (!engine.initialize()) {
+      QTimer::singleShot(0, this, &QWidget::close);
+      return;
     }
-    void closeEvent(QCloseEvent *e) override {timer.stop(); if(engine.initialized()){saveConfig(); engine.attachPreview(0,0,0); engine.shutdown();} QMainWindow::closeEvent(e);}
+    if (QFileInfo::exists(config))
+      engine.loadConfiguration(config);
+    if (engine.scenes().isEmpty()) {
+      engine.addScene("Scene");
+      engine.addSource("Scene", "color", "Background");
+    }
+    preview = new Preview(&engine);
+    setCentralWidget(preview);
+    auto sceneBox = new QWidget;
+    auto sl = new QVBoxLayout(sceneBox);
+    scenes = new QListWidget;
+    sl->addWidget(scenes);
+    auto sr = new QHBoxLayout;
+    sl->addLayout(sr);
+    button("+", sr, [this] {
+      bool ok = false;
+      auto n = QInputDialog::getText(this, "Add scene", "Name",
+                                     QLineEdit::Normal, {}, &ok);
+      if (ok)
+        engine.addScene(n);
+    });
+    button("−", sr, [this] {
+      if (scenes->currentItem())
+        engine.removeScene(scenes->currentItem()->text());
+    });
+    dock("Scenes", sceneBox, Qt::LeftDockWidgetArea);
+    auto sourceBox = new QWidget;
+    auto sol = new QVBoxLayout(sourceBox);
+    sources = new QListWidget;
+    sol->addWidget(sources);
+    auto sor = new QHBoxLayout;
+    sol->addLayout(sor);
+    button("+", sor, [this] { addSource(); });
+    button("−", sor, [this] {
+      if (sources->currentItem())
+        engine.removeSource(engine.currentScene(),
+                            sources->currentItem()->text());
+    });
+    button("Audio…", sor, [this] { audioDialog(); });
+    dock("Sources", sourceBox, Qt::LeftDockWidgetArea);
+    connect(scenes, &QListWidget::currentTextChanged, this,
+            [this](const QString &s) {
+              if (!refreshing && !s.isEmpty()) {
+                automationPanel->manualOverride();
+                engine.selectScene(s);
+              }
+            });
+    connect(sources, &QListWidget::itemChanged, this,
+            [this](QListWidgetItem *i) {
+              if (!refreshing) {
+                visibility[engine.currentScene() + "/" + i->text()] =
+                    i->checkState() == Qt::Checked;
+                engine.setSourceVisible(engine.currentScene(), i->text(),
+                                        i->checkState() == Qt::Checked);
+              }
+            });
+    connect(&engine, &Engine::scenesChanged, this, [this] { refreshScenes(); });
+    auto controls = new QWidget;
+    auto cl = new QVBoxLayout(controls);
+    stream = button("Start streaming", cl, [this] {
+      engine.statistics()["streaming"].toBool() ? engine.stopStreaming()
+                                                : void(engine.startStreaming());
+    });
+    record = button("Start recording", cl, [this] {
+      engine.statistics()["recording"].toBool() ? engine.stopRecording()
+                                                : void(engine.startRecording());
+    });
+    replay = button("Start replay buffer", cl, [this] {
+      engine.statistics()["replay"].toBool() ? engine.stopReplay()
+                                             : void(engine.startReplay());
+    });
+    save = button("Save replay", cl, [this] { engine.saveReplay(); });
+    button("Remux MKV to MP4…", cl, [this] { remuxDialog(); });
+    button("Cancel remux", cl, [this] {
+      if (remuxProcess.state() != QProcess::NotRunning)
+        remuxProcess.kill();
+    });
+    button("Global hotkeys…", cl,
+           [this] { automationPanel->editHotkeys(this); });
+    button("Settings…", cl, [this] { settingsDialog(); });
+    cl->addStretch();
+    dock("Controls", controls, Qt::RightDockWidgetArea);
+    auto dw = new QWidget;
+    auto dl = new QVBoxLayout(dw);
+    auto presets = new QComboBox;
+    for (int n : {0, 15, 30, 60, 90, 120})
+      presets->addItem(QString::number(n) + " s", n);
+    presets->addItem("Custom", -1);
+    dl->addWidget(presets);
+    delay = new QSpinBox;
+    delay->setRange(0, 300);
+    delay->setSuffix(" s");
+    delay->setValue(engine.settings()["delayMs"].toInt() / 1000);
+    dl->addWidget(delay);
+    button("Apply delay", dl,
+           [this] { engine.setDelayMs(delay->value() * 1000); });
+    connect(presets, &QComboBox::currentIndexChanged, this, [this, presets] {
+      if (presets->currentData().toInt() >= 0)
+        delay->setValue(presets->currentData().toInt());
+    });
+    delayStatus = new QLabel;
+    delayStatus->setWordWrap(true);
+    dl->addWidget(delayStatus);
+    auto warning = new QLabel("Increasing delay holds output. Decreasing cuts "
+                              "content. Holds may disconnect the server.");
+    warning->setWordWrap(true);
+    warning->setMinimumHeight(70);
+    dl->addWidget(warning);
+    dock("Stream delay", dw, Qt::RightDockWidgetArea);
+    meters = new QLabel;
+    meters->setMargin(8);
+    meters->setWordWrap(true);
+    dock("Audio meters", meters, Qt::BottomDockWidgetArea);
+    stats = new QLabel;
+    stats->setAlignment(Qt::AlignTop | Qt::AlignLeft);
+    stats->setWordWrap(true);
+    stats->setMargin(8);
+    dock("Statistics", stats, Qt::BottomDockWidgetArea);
+    automationPanel = new feathercast::ui::AutomationPanel(&engine, dir, this);
+    dock("Automation", automationPanel, Qt::BottomDockWidgetArea);
+    auto view = menuBar()->addMenu("View");
+    for (auto d : findChildren<QDockWidget *>())
+      view->addAction(d->toggleViewAction());
+    auto previewToggle = view->addAction("Enable preview drawing");
+    previewToggle->setCheckable(true);
+    previewToggle->setChecked(engine.settings()["previewEnabled"].toBool());
+    connect(previewToggle, &QAction::toggled, this,
+            [this](bool on) { engine.setPreviewEnabled(on); });
+    menuBar()->addAction("Settings…", this, [this] { settingsDialog(); });
+    QSettings ui(dir + "/ui.ini", QSettings::IniFormat);
+    ui.beginGroup("visibility");
+    for (const auto &k : ui.childKeys())
+      visibility[QString::fromUtf8(QByteArray::fromBase64(
+          k.toLatin1(), QByteArray::Base64UrlEncoding))] = ui.value(k).toBool();
+    ui.endGroup();
+    ui.beginGroup("audio");
+    for (const auto &k : ui.childGroups()) {
+      ui.beginGroup(k);
+      auto name = QString::fromUtf8(
+          QByteArray::fromBase64(k.toLatin1(), QByteArray::Base64UrlEncoding));
+      audio[name] = {ui.value("volume", 100).toInt(),
+                     ui.value("muted", false).toBool()};
+      engine.setSourceAudio(name, audio[name].first / 100.0,
+                            audio[name].second);
+      ui.endGroup();
+    }
+    ui.endGroup();
+    refreshScenes();
+    restoreGeometry(ui.value("geometry").toByteArray());
+    restoreState(ui.value("state").toByteArray());
+    connect(&timer, &QTimer::timeout, this, [this] {
+      updateStats();
+      if (++saveTicks % 30 == 0)
+        saveConfig();
+    });
+    timer.start(1000);
+    updateStats();
+    QTimer::singleShot(0, this, [this] {
+      if (preview)
+        engine.attachPreview(preview->winId(), preview->width(),
+                             preview->height());
+    });
+  }
+  QJsonObject selfTest() {
+    return automationPanel ? automationPanel->selfTest()
+                           : QJsonObject{{"initialized", false}};
+  }
+  void closeEvent(QCloseEvent *e) override {
+    timer.stop();
+    if (remuxProcess.state() != QProcess::NotRunning) {
+      remuxProcess.kill();
+      remuxProcess.waitForFinished(3000);
+      QFile::remove(remuxTemporary);
+    }
+    if (automationPanel) {
+      automationPanel->save();
+      delete automationPanel;
+      automationPanel = nullptr;
+    }
+    if (engine.initialized()) {
+      saveConfig();
+      engine.attachPreview(0, 0, 0);
+      engine.shutdown();
+    }
+    QMainWindow::closeEvent(e);
+  }
 };
 void Window::settingsDialog() {
-    QDialog d(this); d.setWindowTitle("Settings"); d.resize(720,520); auto outer=new QVBoxLayout(&d); auto tabs=new QTabWidget; outer->addWidget(tabs); auto s=engine.settings();
-    auto page=[&](QString name){auto w=new QWidget; auto f=new QFormLayout(w); tabs->addTab(w,name); return f;};
-    auto number=[&](QFormLayout *f,QString label,QString key,int min,int max){auto b=new QSpinBox; b->setRange(min,max); b->setValue(s[key].toInt()); f->addRow(label,b); return b;};
-    auto general=page("General"); auto folder=new QLineEdit(s["outputDirectory"].toString()); auto browse=new QPushButton("Browse…"); auto row=new QWidget; auto rl=new QHBoxLayout(row); rl->setContentsMargins(0,0,0,0); rl->addWidget(folder); rl->addWidget(browse); general->addRow("Output folder",row); connect(browse,&QPushButton::clicked,&d,[&]{auto p=QFileDialog::getExistingDirectory(&d,"Output folder",folder->text()); if(!p.isEmpty()) folder->setText(QDir(p).absolutePath());}); auto previewOn=new QCheckBox("Enable preview drawing"); previewOn->setChecked(s["previewEnabled"].toBool()); general->addRow(previewOn); general->addRow(new QLabel("Layout and configuration are saved on exit. Dark theme is enabled."));
-    auto st=page("Stream"); auto service=new QComboBox; service->addItems({"Custom","Twitch","YouTube"}); auto endpoint=new QLineEdit(s["streamEndpoint"].toString()); auto key=new QLineEdit; key->setEchoMode(QLineEdit::Password); key->setPlaceholderText(engine.hasStreamKey()?"Stored securely; leave blank to keep":"Stream key"); st->addRow("Service",service); st->addRow("Base endpoint",endpoint); st->addRow("Stream key",key); st->addRow(new QLabel("Key is protected separately with Windows DPAPI.")); connect(service,&QComboBox::currentIndexChanged,&d,[=](int i){if(i==1) endpoint->setText("rtmp://live.twitch.tv/app"); if(i==2) endpoint->setText("rtmp://a.rtmp.youtube.com/live2");});
-    auto out=page("Output"); auto encoder=new QComboBox; encoder->addItem("Automatic", "auto"); encoder->addItem("Software x264", "obs_x264"); encoder->addItem("NVIDIA NVENC", "obs_nvenc_h264_tex"); encoder->setCurrentIndex(qMax(0,encoder->findData(s["encoder"].toString()))); out->addRow("Encoder",encoder); auto vb=number(out,"Video bitrate (kbps)","videoBitrateKbps",100,100000); auto ab=number(out,"Audio bitrate (kbps)","audioBitrateKbps",32,320); auto kf=number(out,"Keyframe interval (s)","keyframeSeconds",1,10);
-    auto au=page("Audio"); au->addRow(new QLabel("Select a source and use Audio to adjust its volume or mute. Audio meters are unavailable."));
-    auto vid=page("Video"); auto w=number(vid,"Width","width",320,7680); auto h=number(vid,"Height","height",180,4320); auto fps=number(vid,"FPS","fps",1,240);
-    auto hot=page("Hotkeys"); hot->addRow(new QLabel("Global hotkeys are not available yet."));
-    auto rep=page("Replay buffer"); auto seconds=number(rep,"Duration (seconds)","replaySeconds",1,300); auto rm=number(rep,"Memory cap (MiB)","replayMemoryMb",16,2048);
-    auto del=page("Stream delay"); auto dm=number(del,"Memory cap (MiB)","delayMemoryMb",16,2048); del->addRow(new QLabel("Use the main window to change delay from 0 to 300 seconds."));
-    auto automation=page("Scene automation"); auto note=new QLabel("The automation editor is not available yet. Scenes are changed manually."); note->setWordWrap(true); automation->addRow(note);
-    auto plugins=page("Plugins"); auto list=new QListWidget; auto reload=[&]{list->clear(); for(auto v:engine.pluginActions()){auto o=v.toObject(); auto i=new QListWidgetItem(o["plugin"].toString()+" — "+o["name"].toString(),list); i->setData(Qt::UserRole,o["id"].toString());}}; reload(); plugins->addRow(list); auto load=new QPushButton("Load trusted plugin DLL…"); plugins->addRow(load); connect(load,&QPushButton::clicked,&d,[&]{auto p=QFileDialog::getOpenFileName(&d,"Load plugin",QDir::homePath(),"DLL files (*.dll)"); if(!p.isEmpty()&&engine.loadPlugin(QFileInfo(p).absoluteFilePath())) reload();}); auto invoke=new QPushButton("Invoke selected action…"); plugins->addRow(invoke); connect(invoke,&QPushButton::clicked,&d,[&]{if(!list->currentItem()) return; bool ok; auto args=QInputDialog::getText(&d,"Plugin action","JSON arguments",QLineEdit::Normal,"{}",&ok); if(ok) engine.invokePluginAction(list->currentItem()->data(Qt::UserRole).toString(),args);});
-    auto advanced=page("Advanced"); advanced->addRow(new QLabel("Plugins run trusted code in this process and are loaded only when selected.")); auto perf=page("Performance"); perf->addRow(new QLabel("CPU, GPU and audio meter readings are unavailable."));
-    auto box=new QDialogButtonBox(QDialogButtonBox::Ok|QDialogButtonBox::Cancel); outer->addWidget(box); connect(box,&QDialogButtonBox::rejected,&d,&QDialog::reject); connect(box,&QDialogButtonBox::accepted,&d,[&]{if(!QFileInfo(folder->text()).isAbsolute()){QMessageBox::warning(&d,"Settings","Choose an absolute output directory."); return;} s["outputDirectory"]=QDir::cleanPath(folder->text()); s["streamEndpoint"]=endpoint->text().trimmed(); s["encoder"]=encoder->currentData().toString(); s["videoBitrateKbps"]=vb->value(); s["audioBitrateKbps"]=ab->value(); s["keyframeSeconds"]=kf->value(); s["width"]=w->value(); s["height"]=h->value(); s["fps"]=fps->value(); s["replaySeconds"]=seconds->value(); s["replayMemoryMb"]=rm->value(); s["delayMemoryMb"]=dm->value(); s["previewEnabled"]=previewOn->isChecked(); if(!engine.applySettings(s)) return; if(!key->text().isEmpty()&&!engine.storeStreamKey(key->text())) return; engine.setPreviewEnabled(previewOn->isChecked()); d.accept();}); d.exec();
+  QDialog d(this);
+  d.setWindowTitle("Settings");
+  d.resize(720, 520);
+  auto outer = new QVBoxLayout(&d);
+  auto tabs = new QTabWidget;
+  outer->addWidget(tabs);
+  auto s = engine.settings();
+  auto page = [&](QString name) {
+    auto w = new QWidget;
+    auto f = new QFormLayout(w);
+    tabs->addTab(w, name);
+    return f;
+  };
+  auto number = [&](QFormLayout *f, QString label, QString key, int min,
+                    int max) {
+    auto b = new QSpinBox;
+    b->setRange(min, max);
+    b->setValue(s[key].toInt());
+    f->addRow(label, b);
+    return b;
+  };
+  auto general = page("General");
+  auto folder = new QLineEdit(s["outputDirectory"].toString());
+  auto browse = new QPushButton("Browse…");
+  auto row = new QWidget;
+  auto rl = new QHBoxLayout(row);
+  rl->setContentsMargins(0, 0, 0, 0);
+  rl->addWidget(folder);
+  rl->addWidget(browse);
+  general->addRow("Output folder", row);
+  connect(browse, &QPushButton::clicked, &d, [&] {
+    auto p =
+        QFileDialog::getExistingDirectory(&d, "Output folder", folder->text());
+    if (!p.isEmpty())
+      folder->setText(QDir(p).absolutePath());
+  });
+  auto previewOn = new QCheckBox("Enable preview drawing");
+  previewOn->setChecked(s["previewEnabled"].toBool());
+  general->addRow(previewOn);
+  auto replayOn = new QCheckBox("Enable replay buffer module");
+  replayOn->setChecked(s["replayEnabled"].toBool());
+  general->addRow(replayOn);
+  auto pluginsOn = new QCheckBox("Enable trusted plugins module");
+  pluginsOn->setChecked(s["pluginsEnabled"].toBool());
+  general->addRow(pluginsOn);
+  auto theme = new QComboBox;
+  theme->addItems({"Dark", "Light"});
+  QSettings themeSettings(dir + "/ui.ini", QSettings::IniFormat);
+  theme->setCurrentIndex(themeSettings.value("theme", 0).toInt());
+  general->addRow("Theme", theme);
+  general->addRow(new QLabel(
+      "Layout and configuration are saved every 30 seconds and on exit."));
+  auto st = page("Stream");
+  auto service = new QComboBox;
+  service->addItems({"Custom", "Twitch", "YouTube"});
+  auto endpoint = new QLineEdit(s["streamEndpoint"].toString());
+  auto key = new QLineEdit;
+  key->setEchoMode(QLineEdit::Password);
+  key->setPlaceholderText(engine.hasStreamKey()
+                              ? "Stored securely; leave blank to keep"
+                              : "Stream key");
+  st->addRow("Service", service);
+  st->addRow("Base endpoint", endpoint);
+  st->addRow("Stream key", key);
+  st->addRow(new QLabel("Key is protected separately with Windows DPAPI."));
+  connect(service, &QComboBox::currentIndexChanged, &d, [=](int i) {
+    if (i == 1)
+      endpoint->setText("rtmp://live.twitch.tv/app");
+    if (i == 2)
+      endpoint->setText("rtmp://a.rtmp.youtube.com/live2");
+  });
+  auto out = page("Output");
+  auto encoder = new QComboBox;
+  encoder->addItem("Automatic", "auto");
+  encoder->addItem("Software x264", "obs_x264");
+  encoder->addItem("NVIDIA NVENC", "obs_nvenc_h264_tex");
+  encoder->setCurrentIndex(qMax(0, encoder->findData(s["encoder"].toString())));
+  out->addRow("Encoder", encoder);
+  auto vb =
+      number(out, "Video bitrate (kbps)", "videoBitrateKbps", 100, 100000);
+  auto ab = number(out, "Audio bitrate (kbps)", "audioBitrateKbps", 32, 320);
+  auto kf = number(out, "Keyframe interval (s)", "keyframeSeconds", 1, 10);
+  auto au = page("Audio");
+  au->addRow(
+      new QLabel("Select a source and use Audio to adjust its volume or mute. "
+                 "Live source peak levels appear in the Audio meters dock."));
+  auto vid = page("Video");
+  auto w = number(vid, "Width", "width", 320, 7680);
+  auto h = number(vid, "Height", "height", 180, 4320);
+  auto fps = number(vid, "FPS", "fps", 1, 240);
+  auto hot = page("Hotkeys");
+  auto hotkeys = new QPushButton("Configure global hotkeys…");
+  hot->addRow(hotkeys);
+  connect(hotkeys, &QPushButton::clicked, &d,
+          [&] { automationPanel->editHotkeys(&d); });
+  auto rep = page("Replay buffer");
+  auto seconds = number(rep, "Duration (seconds)", "replaySeconds", 1, 300);
+  auto durationPresets = new QComboBox;
+  for (int n : {15, 30, 60, 120, 300})
+    durationPresets->addItem(QString::number(n) + " seconds", n);
+  rep->addRow("Duration presets", durationPresets);
+  connect(durationPresets, &QComboBox::currentIndexChanged, &d,
+          [=] { seconds->setValue(durationPresets->currentData().toInt()); });
+  auto rm = number(rep, "Memory cap (MiB)", "replayMemoryMb", 16, 2048);
+  auto del = page("Stream delay");
+  auto dm = number(del, "Memory cap (MiB)", "delayMemoryMb", 16, 2048);
+  del->addRow(
+      new QLabel("Use the main window to change delay from 0 to 300 seconds."));
+  auto automation = page("Scene automation");
+  auto note = new QLabel(
+      "Use the Automation dock to edit rules, OR groups, AND conditions, "
+      "ordered actions, priority, debounce and cooldown. Manual scene "
+      "selection pauses automation for 30 seconds.");
+  note->setWordWrap(true);
+  automation->addRow(note);
+  auto plugins = page("Plugins");
+  auto list = new QListWidget;
+  auto reload = [&] {
+    list->clear();
+    for (auto v : engine.pluginActions()) {
+      auto o = v.toObject();
+      auto i = new QListWidgetItem(
+          o["plugin"].toString() + " — " + o["name"].toString(), list);
+      i->setData(Qt::UserRole, o["id"].toString());
+    }
+  };
+  reload();
+  plugins->addRow(list);
+  auto load = new QPushButton("Load trusted plugin DLL…");
+  plugins->addRow(load);
+  connect(load, &QPushButton::clicked, &d, [&] {
+    auto p = QFileDialog::getOpenFileName(&d, "Load plugin", QDir::homePath(),
+                                          "DLL files (*.dll)");
+    if (!p.isEmpty() && engine.loadPlugin(QFileInfo(p).absoluteFilePath()))
+      reload();
+  });
+  auto invoke = new QPushButton("Invoke selected action…");
+  plugins->addRow(invoke);
+  connect(invoke, &QPushButton::clicked, &d, [&] {
+    if (!list->currentItem())
+      return;
+    bool ok;
+    auto args = QInputDialog::getText(&d, "Plugin action", "JSON arguments",
+                                      QLineEdit::Normal, "{}", &ok);
+    if (ok)
+      engine.invokePluginAction(
+          list->currentItem()->data(Qt::UserRole).toString(), args);
+  });
+  auto advanced = page("Advanced");
+  advanced->addRow(new QLabel("Plugins run trusted code in this process and "
+                              "are loaded only when selected."));
+  auto perf = page("Performance");
+  perf->addRow(new QLabel("CPU and GPU utilization readings are unavailable. "
+                          "Audio peak meters use real libobs callbacks."));
+  auto box =
+      new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+  outer->addWidget(box);
+  connect(box, &QDialogButtonBox::rejected, &d, &QDialog::reject);
+  connect(box, &QDialogButtonBox::accepted, &d, [&] {
+    if (!QFileInfo(folder->text()).isAbsolute()) {
+      QMessageBox::warning(&d, "Settings",
+                           "Choose an absolute output directory.");
+      return;
+    }
+    s["outputDirectory"] = QDir::cleanPath(folder->text());
+    s["streamEndpoint"] = endpoint->text().trimmed();
+    s["encoder"] = encoder->currentData().toString();
+    s["videoBitrateKbps"] = vb->value();
+    s["audioBitrateKbps"] = ab->value();
+    s["keyframeSeconds"] = kf->value();
+    s["width"] = w->value();
+    s["height"] = h->value();
+    s["fps"] = fps->value();
+    s["replaySeconds"] = seconds->value();
+    s["replayMemoryMb"] = rm->value();
+    s["delayMemoryMb"] = dm->value();
+    s["previewEnabled"] = previewOn->isChecked();
+    s["replayEnabled"] = replayOn->isChecked();
+    s["pluginsEnabled"] = pluginsOn->isChecked();
+    if (!engine.applySettings(s))
+      return;
+    if (!key->text().isEmpty() && !engine.storeStreamKey(key->text()))
+      return;
+    engine.setPreviewEnabled(previewOn->isChecked());
+    themeSettings.setValue("theme", theme->currentIndex());
+    qApp->setStyleSheet(theme->currentIndex() == 0 ? darkStyle : QString());
+    d.accept();
+  });
+  d.exec();
 }
-int main(int argc,char **argv) {
-    QApplication app(argc,argv); QCoreApplication::setOrganizationName("FeatherCast"); QCoreApplication::setApplicationName("FeatherCast"); QCommandLineParser parser; parser.addHelpOption(); QCommandLineOption smoke("smoke-ui","Run UI smoke mode"); QCommandLineOption quit("quit-after","Quit after seconds","seconds"); QCommandLineOption config("config-directory","Absolute configuration directory","path"); parser.addOptions({smoke,quit,config}); parser.process(app); auto dir=parser.value(config); if(dir.isEmpty()) dir=QStandardPaths::writableLocation(QStandardPaths::AppDataLocation); if(!QFileInfo(dir).isAbsolute()) return 2; dir=QDir::cleanPath(dir);
-    app.setStyle("Fusion"); app.setStyleSheet("QWidget{background:#20242c;color:#e8ebf2;font-size:10pt} QMainWindow,QDialog{background:#191c23} QDockWidget::title{background:#292f3a;padding:7px;font-weight:600} QPushButton{background:#343c4b;border:1px solid #4a5568;border-radius:4px;padding:6px 10px} QPushButton:hover{background:#445168} QPushButton:disabled{color:#7b8290} QListWidget,QLineEdit,QSpinBox,QComboBox{background:#14171d;border:1px solid #414958;border-radius:3px;padding:4px} QMenuBar,QMenu{background:#252a34} QMenu::item:selected{background:#43516a} QTabWidget::pane{border:1px solid #414958} QTabBar::tab{padding:6px;background:#292f3a} QTabBar::tab:selected{background:#43516a}");
-    Window window(dir,parser.isSet(smoke)); window.show(); if(parser.isSet(quit)) QTimer::singleShot(qMax(0,parser.value(quit).toInt())*1000,&window,&QWidget::close); return app.exec();
+int main(int argc, char **argv) {
+  QApplication app(argc, argv);
+  QCoreApplication::setOrganizationName("FeatherCast");
+  QCoreApplication::setApplicationName("FeatherCast");
+  QCommandLineParser parser;
+  parser.addHelpOption();
+  QCommandLineOption smoke("smoke-ui", "Run UI smoke mode");
+  QCommandLineOption quit("quit-after", "Quit after seconds", "seconds");
+  QCommandLineOption config("config-directory",
+                            "Absolute configuration directory", "path");
+  QCommandLineOption screenshot("screenshot",
+                                "Save a real widget screenshot after startup",
+                                "absolutePNG");
+  QCommandLineOption selftest("ui-self-test",
+                              "Run integrated UI checks and save results",
+                              "absoluteJSON");
+  parser.addOptions({smoke, quit, config, screenshot, selftest});
+  parser.process(app);
+  auto dir = parser.value(config);
+  if (dir.isEmpty())
+    dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+  if (!QFileInfo(dir).isAbsolute())
+    return 2;
+  dir = QDir::cleanPath(dir);
+  if (parser.isSet(config)) {
+    QStandardPaths::setTestModeEnabled(true);
+    QCoreApplication::setApplicationName("FeatherCast-Test-" +
+                                         QString::number(qHash(dir)));
+  }
+  app.setStyle("Fusion");
+  app.setStyleSheet(
+      "QWidget{background:#20242c;color:#e8ebf2;font-size:10pt} "
+      "QMainWindow,QDialog{background:#191c23} "
+      "QDockWidget::title{background:#292f3a;padding:7px;font-weight:600} "
+      "QPushButton{background:#343c4b;border:1px solid "
+      "#4a5568;border-radius:4px;padding:6px 10px} "
+      "QPushButton:hover{background:#445168} "
+      "QPushButton:disabled{color:#7b8290} "
+      "QListWidget,QLineEdit,QSpinBox,QComboBox{background:#14171d;border:1px "
+      "solid #414958;border-radius:3px;padding:4px} "
+      "QMenuBar,QMenu{background:#252a34} "
+      "QMenu::item:selected{background:#43516a} QTabWidget::pane{border:1px "
+      "solid #414958} QTabBar::tab{padding:6px;background:#292f3a} "
+      "QTabBar::tab:selected{background:#43516a}");
+  darkStyle = app.styleSheet();
+  QSettings themeSettings(dir + "/ui.ini", QSettings::IniFormat);
+  if (themeSettings.value("theme", 0).toInt() == 1)
+    app.setStyleSheet({});
+  int testExit = 0;
+  Window window(dir, parser.isSet(smoke) || parser.isSet(selftest));
+  window.show();
+  if (parser.isSet(screenshot))
+    QTimer::singleShot(2000, &window, [&] {
+      auto path = parser.value(screenshot);
+      if (QFileInfo(path).isAbsolute())
+        if (!window.grab().save(path))
+          testExit = 2;
+    });
+  if (parser.isSet(selftest))
+    QTimer::singleShot(2500, &window, [&] {
+      auto path = parser.value(selftest);
+      if (QFileInfo(path).isAbsolute()) {
+        QSaveFile file(path);
+        if (file.open(QIODevice::WriteOnly)) {
+          auto results = window.selfTest();
+          for (auto value : results)
+            if (value.isBool() && !value.toBool())
+              testExit = 1;
+          file.write(QJsonDocument(results).toJson());
+          file.commit();
+        }
+      }
+    });
+  if (parser.isSet(quit))
+    QTimer::singleShot(qMax(0, parser.value(quit).toInt()) * 1000, &window,
+                       &QWidget::close);
+  int result = app.exec();
+  return result ? result : testExit;
 }

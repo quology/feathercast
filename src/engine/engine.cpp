@@ -2,6 +2,8 @@
 #include "feathercast/core/plugin_api.h"
 #include "relay_output.hpp"
 #include <obs.h>
+#include <obs-audio-controls.h>
+#include <QSet>
 #include <util/platform.h>
 #include <QCoreApplication>
 #include <QDateTime>
@@ -88,6 +90,30 @@ void registerTone() {
 bool active(obs_output_t* output) { return output && (obs_output_active(output) || obs_output_reconnecting(output)); }
 }
 
+// Callback data stays alive until OBS has detached the meter and removed its callback.
+struct AudioMeter {
+    obs_volmeter_t* meter{};
+    std::atomic<float> peak{-100.0f};
+    std::atomic<std::uint64_t> updated{};
+    static void update(void* data, const float*, const float* peaks, const float*) {
+        auto* self = static_cast<AudioMeter*>(data);
+        float value = -100.0f;
+        for (int i = 0; i < 2; ++i) if (std::isfinite(peaks[i])) value = std::max(value, peaks[i]);
+        self->peak.store(value, std::memory_order_relaxed);
+        self->updated.store(os_gettime_ns(), std::memory_order_release);
+    }
+    explicit AudioMeter(obs_source_t* source) {
+        meter = obs_volmeter_create(OBS_FADER_LOG);
+        if (meter) { obs_volmeter_add_callback(meter, update, this); obs_volmeter_attach_source(meter, source); }
+    }
+    ~AudioMeter() {
+        if (meter) { obs_volmeter_detach_source(meter); obs_volmeter_remove_callback(meter, update, this); obs_volmeter_destroy(meter); }
+    }
+    double reading() const {
+        const auto stamp = updated.load(std::memory_order_acquire);
+        return stamp && os_gettime_ns() - stamp < 1000000000ULL ? peak.load(std::memory_order_relaxed) : -100.0;
+    }
+};
 struct Engine::Impl {
     Engine* q;
     bool ready{};
@@ -97,6 +123,7 @@ struct Engine::Impl {
     QJsonObject config{Engine::defaultSettings()};
     struct Scene { obs_scene_t* scene{}; QJsonArray sources; };
     QMap<QString, Scene> scenes;
+    std::map<QString, std::unique_ptr<AudioMeter>> meters;
     QString selected;
     obs_display_t* display{};
     obs_encoder_t* video{};
@@ -231,7 +258,7 @@ QJsonObject Engine::defaultSettings() {
         {"videoBitrateKbps", 6000}, {"audioBitrateKbps", 160}, {"keyframeSeconds", 2},
         {"outputDirectory", QStandardPaths::writableLocation(QStandardPaths::MoviesLocation) + "/FeatherCast"},
         {"streamEndpoint", ""}, {"delayMs", 0}, {"delayMemoryMb", 256},
-        {"replaySeconds", 30}, {"replayMemoryMb", 256}, {"previewEnabled", true}};
+        {"replaySeconds", 30}, {"replayMemoryMb", 256}, {"previewEnabled", true}, {"replayEnabled", true}, {"pluginsEnabled", true}};
 }
 bool Engine::initialize(QString runtimeRoot, QJsonObject settings) {
     if (d->ready) return true;
@@ -284,6 +311,7 @@ void Engine::shutdown() {
     d->plugins.clear();
     if (!d->ready) return;
     d->detachPreview(); d->releaseEncoders();
+    d->meters.clear();
     obs_set_output_source(0, nullptr);
     for (const auto& scene : d->scenes) {
         // OBS 33's program canvas owns a strong scene reference. Remove the
@@ -348,14 +376,30 @@ bool Engine::loadConfiguration(const QString& path) {
     QFile file(path); if (!file.open(QIODevice::ReadOnly) || file.size() > 4 * 1024 * 1024) return false;
     QJsonParseError error; const auto doc = QJsonDocument::fromJson(file.readAll(), &error);
     if (error.error != QJsonParseError::NoError || !doc.isObject() || doc["version"].toInt() != 1) return d->fail("Invalid configuration file");
+    // Validate the entire scene graph before settings changes or destruction.
+    if (!doc["settings"].isObject() || !doc["scenes"].isArray() || !doc["selectedScene"].isString()) return d->fail("Invalid configuration fields");
+    const auto savedScenes = doc["scenes"].toArray();
+    if (savedScenes.size() > 128) return d->fail("Too many saved scenes");
+    QSet<QString> sceneNames, sourceNames;
+    for (auto value : savedScenes) {
+        auto scene = value.toObject(); auto name = scene["name"].toString();
+        if (!value.isObject() || name.trimmed().isEmpty() || name.size() > 128 || sceneNames.contains(name) || !scene["sources"].isArray() || scene["sources"].toArray().size() > 64) return d->fail("Invalid saved scene");
+        sceneNames.insert(name);
+        for (auto sourceValue : scene["sources"].toArray()) {
+            auto source = sourceValue.toObject(); auto sourceName = source["name"].toString();
+            if (!sourceValue.isObject() || sourceName.trimmed().isEmpty() || sourceName.size() > 128 || sourceNames.contains(sourceName) || !sourceId(source["type"].toString()) || !source["properties"].isObject() || sceneNames.contains(sourceName)) return d->fail("Invalid saved source");
+            sourceNames.insert(sourceName);
+        }
+    }
+    for (const auto& name : sceneNames) if (sourceNames.contains(name)) return d->fail("Source and scene names must be unique");
+    if (!sceneNames.isEmpty() && !sceneNames.contains(doc["selectedScene"].toString())) return d->fail("Invalid selected scene");
     if (!applySettings(doc["settings"].toObject())) return false;
     if (!d->ready) return true;
     obs_set_output_source(0, nullptr);
+    d->meters.clear();
     for (const auto& scene : d->scenes) { obs_source_remove(obs_scene_get_source(scene.scene)); obs_scene_release(scene.scene); }
     d->scenes.clear(); d->selected.clear();
     while (obs_wait_for_destroy_queue()) {}
-    const auto savedScenes = doc["scenes"].toArray();
-    if (savedScenes.size() > 128) return d->fail("Too many saved scenes");
     bool success = true;
     for (const auto& value : savedScenes) {
         const auto object = value.toObject(); const auto name = object["name"].toString();
@@ -379,6 +423,7 @@ bool Engine::addScene(const QString& name) {
 bool Engine::removeScene(const QString& name) {
     auto it = d->scenes.find(name); if (it == d->scenes.end()) return false;
     if (d->selected == name) { obs_set_output_source(0, nullptr); d->selected.clear(); }
+    for (auto source : it->sources) d->meters.erase(source.toObject()["name"].toString());
     obs_source_remove(obs_scene_get_source(it->scene)); obs_scene_release(it->scene); d->scenes.erase(it);
     if (d->selected.isEmpty() && !d->scenes.isEmpty()) selectScene(d->scenes.firstKey());
     emit scenesChanged(); return true;
@@ -407,6 +452,7 @@ bool Engine::addSource(const QString& scene, const QString& type, const QString&
         vec2 bounds{static_cast<float>(d->config["width"].toInt()), static_cast<float>(d->config["height"].toInt())};
         obs_sceneitem_set_bounds_type(item, OBS_BOUNDS_SCALE_INNER); obs_sceneitem_set_bounds(item, &bounds);
     }
+    if (obs_source_get_output_flags(source) & OBS_SOURCE_AUDIO) d->meters[name] = std::make_unique<AudioMeter>(source);
     obs_source_release(source);
     found->sources.append(QJsonObject{{"type", type}, {"name", name}, {"properties", properties}});
     emit scenesChanged(); return true;
@@ -414,6 +460,7 @@ bool Engine::addSource(const QString& scene, const QString& type, const QString&
 bool Engine::removeSource(const QString& scene, const QString& name) {
     auto found = d->scenes.find(scene); if (found == d->scenes.end()) return false;
     auto* item = obs_scene_find_source(found->scene, name.toUtf8().constData()); if (!item) return false;
+    d->meters.erase(name);
     obs_sceneitem_remove(item);
     for (qsizetype i = 0; i < found->sources.size(); ++i) if (found->sources[i].toObject()["name"].toString() == name) { found->sources.removeAt(i); break; }
     emit scenesChanged(); return true;
@@ -492,6 +539,7 @@ bool Engine::startRecording(QString filePath) {
 }
 void Engine::stopRecording() { if (d->recording) obs_output_stop(d->recording); }
 bool Engine::startReplay() {
+    if (!d->config["replayEnabled"].toBool()) return d->fail("Replay module is disabled");
     if (active(d->replay)) return true;
     if (!d->ensureEncoders()) return false;
     const auto directory = d->config["outputDirectory"].toString(); QDir().mkpath(directory);
@@ -509,6 +557,7 @@ bool Engine::startReplay() {
 }
 void Engine::stopReplay() { if (d->replay) obs_output_stop(d->replay); }
 bool Engine::saveReplay() {
+    if (!d->config["replayEnabled"].toBool()) return d->fail("Replay module is disabled");
     if (!active(d->replay)) return d->fail("Start replay buffering before saving");
     calldata_t cd; calldata_init(&cd); const bool result = proc_handler_call(obs_output_get_proc_handler(d->replay), "save", &cd); calldata_free(&cd);
     return result || d->fail("Replay save request failed");
@@ -531,6 +580,7 @@ QJsonObject Engine::statistics() const {
     result["delayBytes"] = static_cast<double>(relay.buffer.payload_bytes); result["delayPackets"] = static_cast<double>(relay.buffer.packets);
     result["delayDroppedPackets"] = static_cast<double>(relay.buffer.dropped_packets); result["effectiveDelayMs"] = static_cast<double>(relay.buffer.effective_delay_us) / 1000;
     result["recordingBytes"] = d->recording ? static_cast<double>(obs_output_get_total_bytes(d->recording)) : 0;
+    QJsonObject peaks; for (const auto& [name, meter] : d->meters) peaks[name] = meter->reading(); result["audioPeaksDb"] = peaks;
     PROCESS_MEMORY_COUNTERS memory{}; memory.cb = sizeof(memory);
     if (GetProcessMemoryInfo(GetCurrentProcess(), &memory, sizeof(memory))) result["memoryMiB"] = static_cast<double>(memory.WorkingSetSize) / 1048576;
     return result;
@@ -539,6 +589,7 @@ core::AutomationSnapshot Engine::automationSnapshot() const {
     core::AutomationSnapshot snapshot;
     snapshot.streaming = active(d->stream); snapshot.recording = active(d->recording); snapshot.replay_running = active(d->replay);
     snapshot.current_scene = d->selected.toStdString();
+    for (const auto& [name, meter] : d->meters) snapshot.audio_peak_db = std::max(snapshot.audio_peak_db, meter->reading());
     if (d->ready) snapshot.elapsed_ms = static_cast<int64_t>((os_gettime_ns() - d->startedNs) / 1000000);
     DWORD foregroundPid = 0; const auto foreground = GetForegroundWindow(); GetWindowThreadProcessId(foreground, &foregroundPid);
     wchar_t title[1024]{}; GetWindowTextW(foreground, title, 1024); snapshot.window_title = QString::fromWCharArray(title).toStdString();
@@ -554,6 +605,7 @@ core::AutomationSnapshot Engine::automationSnapshot() const {
     return snapshot;
 }
 bool Engine::loadPlugin(const QString& absolutePath) {
+    if (!d->config["pluginsEnabled"].toBool()) return d->fail("Plugins module is disabled");
     if (!QFileInfo(absolutePath).isAbsolute()) return d->fail("Plugin path must be absolute");
     const auto path = QDir::toNativeSeparators(absolutePath);
     auto library = LoadLibraryExW(reinterpret_cast<LPCWSTR>(path.utf16()), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
@@ -588,6 +640,7 @@ QJsonArray Engine::pluginActions() const {
     return result;
 }
 bool Engine::invokePluginAction(const QString& id, const QString& argumentsJson) {
+    if (!d->config["pluginsEnabled"].toBool()) return d->fail("Plugins module is disabled");
     const auto key = id.toUtf8(), args = argumentsJson.toUtf8();
     for (const auto& p : d->plugins) for (uint32_t i = 0; i < p.descriptor->action_count; ++i)
         if (key == p.descriptor->actions[i].id) { try { return p.descriptor->actions[i].invoke(p.context, args.constData()) != 0; } catch (...) { return d->fail("Plugin action threw an exception"); } }

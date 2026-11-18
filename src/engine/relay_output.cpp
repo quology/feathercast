@@ -86,6 +86,8 @@ struct Relay {
         if (!codecData(video->codecpar, ve) || !codecData(audio->codecpar, ae)) { lastError = AVERROR_INVALIDDATA; return false; }
         AVDictionary* opts = nullptr;
         av_dict_set(&opts, "rw_timeout", "5000000", 0);
+        if (endpoint.starts_with("rtmps://"))
+            av_dict_set(&opts, "tls_verify", "1", 0);
         setDeadline();
         result = avio_open2(&mux->pb, endpoint.c_str(), AVIO_FLAG_WRITE, &mux->interrupt_callback, &opts);
         av_dict_free(&opts);
@@ -230,7 +232,7 @@ void encoded(void* ptr, encoder_packet* packet) {
         const auto result = relay.buffer.push(std::move(p), nowUs());
         if (result == core::PushResult::RejectedInvalid) {
             if (relay.lastError != AVERROR_INVALIDDATA)
-                blog(LOG_WARNING, "FeatherCast rejected packet: kind=%d track=%zu dts=%lld pts=%lld num=%d den=%d size=%zu", static_cast<int>(packet->type), packet->track_idx, static_cast<long long>(packet->dts), static_cast<long long>(packet->pts), packet->timebase_num, packet->timebase_den, packet->size);
+                blog(LOG_WARNING, "FeatherCast rejected packet: kind=%d track=%llu dts=%lld pts=%lld num=%d den=%d size=%llu", static_cast<int>(packet->type), static_cast<unsigned long long>(packet->track_idx), static_cast<long long>(packet->dts), static_cast<long long>(packet->pts), packet->timebase_num, packet->timebase_den, static_cast<unsigned long long>(packet->size));
             relay.lastError = AVERROR_INVALIDDATA;
         }
         relay.wake.notify_one();

@@ -16,7 +16,7 @@ FeatherCast owns a libobs process, capture graph, encoders, outputs and Qt inter
 | `ModuleRegistry` | Dependency-aware activation and rollback | Controller thread |
 | Plugin host | ABI validation, action calls and unload lifetime | Controller thread |
 
-Capture and compatible encoders should be shared among streaming, recording and replay. Separate encoders are necessary for different codec, resolution, rate control or quality settings. Each output has independent lifetime/error reporting. Never stop a shared encoder explicitly while another output uses it. Preview disabling removes display rendering work without disabling program composition. There are no claimed performance improvements until equivalent workloads are measured.
+The current engine shares one H.264/AAC stereo encoder pair among streaming, recording and replay; independent profiles are not implemented. Separate encoders are necessary for different codec, resolution, rate control or quality settings. Each output has independent lifetime/error reporting. Never stop a shared encoder explicitly while another output uses it. Preview disabling removes display rendering work without disabling program composition. There are no claimed performance improvements until equivalent workloads are measured.
 
 Qt owns widgets. libobs handles are reference-counted and must be released with the matching OBS functions; allocations must not cross incompatible C runtimes. Do not exchange C++ objects between MinGW Qt and MSVC libraries. libobs C ABI calls can be tested with pinned headers/import libraries; OBS frontend Qt plugins are not automatically compatible with this host. Only explicitly selected non-frontend modules should load.
 
@@ -38,13 +38,13 @@ The queue does not retry a popped packet: after write failure the adapter calls 
 
 ## Real relay integration contract
 
-Register an `obs_output_info` with `OBS_OUTPUT_AV | OBS_OUTPUT_ENCODED`, optionally multi-track audio. Its start routine uses `obs_output_initialize_encoders` and `obs_output_begin_data_capture`, after connection and codec parameters are ready. `encoded_packet` copies packet bytes immediately, converts the packet timebase with checked arithmetic, maps video/audio track IDs, and pushes into `DelayBuffer`. Null input means an encoder error, not an empty frame. End capture before destroying callback state.
+The relay registers an `obs_output_info` with `OBS_OUTPUT_AV | OBS_OUTPUT_ENCODED`; the current application uses one AAC stereo track. Its start routine uses `obs_output_initialize_encoders` and `obs_output_begin_data_capture`, after connection and codec parameters are ready. `encoded_packet` copies packet bytes immediately, converts the packet timebase with checked arithmetic, maps video/audio track IDs, and pushes into `DelayBuffer`. Null input means an encoder error, not an empty frame. End capture before destroying callback state.
 
 libavformat is the selected feasible transport: create an output context for FLV; populate H.264/AAC stream codec parameters and copied encoder extradata; `avio_open2`; `avformat_write_header`; rescale each outgoing microsecond timestamp into the stream's **post-header** timebase; write via `av_interleaved_write_frame`; write trailer/close when possible. Account for Annex B versus AVCC payload/extradata representation. Use an interrupt callback and bounded I/O deadlines so stop and disconnect cannot hang indefinitely. A fresh connection needs codec headers and a video random access frame. RTMP typically has one AAC track; multitrack recording is a separate output.
 
 The standard OBS delay API is not a substitute for this relay. In OBS 33.0.0, `obs_output_set_delay` updates configured fields; active delay is maintained separately in the delay pipeline. A fixed pre-start delay or changing a UI number is not proof of live dynamic delay.
 
-Pending transport verification: local RTMP receiver recording; decode validation of cuts and A/V sync; increase beyond ingest idle timeout; disconnect during packet write; reconnect keyframe/header behavior; full-duration memory pressure; and Twitch/YouTube server behavior. No seamless-transition claim is made.
+Synthetic local RTMP, decode, timestamp/end-alignment checks and receiver-stop/restart reconnect passed. Full-duration memory pressure and external Twitch/YouTube behavior remain unverified. RTMPS certificate verification is enabled; no external TLS session was tested. No seamless-transition claim is made.
 
 ## Implemented automation
 
@@ -52,7 +52,7 @@ Pending transport verification: local RTMP receiver recording; decode validation
 
 Evaluate every rule from one `AutomationSnapshot`, then execute only the highest-priority debounced match. A winner in cooldown retains arbitration so lower-priority rules cannot oscillate scenes. Default rules fire when they become the winner, rather than every tick. Repeat mode requires positive cooldown. Manual override blocks all automatic actions until its steady-clock deadline. Fallback applies only when nothing matches and is suppressed while debounce is pending. Redundant actions are filtered against a projected sequential state, preserving intentional start/stop action sequences.
 
-`evaluate` produces values, never executes callbacks. The controller executes actions once, logs results, and obtains a fresh snapshot next tick. It must not recursively call evaluate in response to its own scene change. Failed actions are reported, not retried in a tight loop. Hotkey pulses must remain present long enough for debounce or use a zero-debounce hotkey rule. `matches` provides side-effect-free rule testing. Snapshot acquisition, JSON import/export, the macro editor and OS hooks belong to the application layer.
+`evaluate` produces values, never executes callbacks. The controller executes actions once, logs results, and obtains a fresh snapshot next tick. It must not recursively call evaluate in response to its own scene change. Failed actions are reported, not retried in a tight loop. Hotkey pulses must remain present long enough for debounce or use a zero-debounce hotkey rule. `matches` provides side-effect-free rule testing. The Qt application implements snapshot acquisition, transactional JSON import/export, visual editing and Windows RegisterHotKey handling. It polls snapshots every 500 ms, supplies real audio peaks and two-second hotkey pulses. External flags require an integration.
 
 ## Modules and plugin ABI
 
@@ -64,6 +64,12 @@ See [docs/PLUGINS.md](docs/PLUGINS.md). The example plugin calls the host to req
 
 ## Build integration and verified core checks
 
-The root CMake project should call `include(CTest)` and `add_subdirectory(src/core)`. Link application code to `feathercast_core`. This defines `feathercast_core_tests` when `BUILD_TESTING` is on and the `feathercast_example_plugin` module target. No Qt, libobs, JSON library or external test framework is required by the core.
+The root CMake project calls `include(CTest)` and `add_subdirectory(src/core)`. Link application code to `feathercast_core`. This defines `feathercast_core_tests` when `BUILD_TESTING` is on and the `feathercast_example_plugin` module target. No Qt, libobs, JSON library or external test framework is required by the core.
 
-The core test executable was compiled with MinGW GCC 13.1, C++20, `-Wall -Wextra -Wpedantic -Werror -O2`, and all 12 scenarios passed on Windows. See `tests/core_tests.cpp` for exact cases. This is not validation of real capture, encoders, RTMP, plugin DLL loading, or viewer playback. Integration results should be recorded separately as those components are completed.
+The core test executable was compiled with MinGW GCC 13.1, C++20, `-Wall -Wextra -Wpedantic -Werror -O2`, and all 13 scenarios passed on Windows, including timer-jitter pacing. See `tests/core_tests.cpp` for exact cases. This is not validation of real capture, encoders, RTMP, plugin DLL loading, or viewer playback. Integration results should be recorded separately as those components are completed.
+
+## Application persistence and helpers
+
+Qt uses atomic QSaveFile JSON and 30-second engine/layout autosaves; automation edits save immediately. DPAPI keys are separate, with a distinct namespace for custom configuration directories. Invalid engine configuration preserves scenes and invalid automation imports preserve rules.
+
+MP4 remux runs asynchronously in a separate QProcess helper with FFmpeg stream copy, temporary destination and rename after finalization. It preserves MKV sources and refuses existing destinations. Cancellation cleanup was inspected but not runtime-tested. Splitting and live disk-pressure protection are absent. Native preview is implemented, but QWidget screenshots cannot verify its HWND visibility. See [feature status](docs/FEATURE_STATUS.md) and [test results](TEST_RESULTS.md).

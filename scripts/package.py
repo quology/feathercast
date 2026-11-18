@@ -31,6 +31,10 @@ def main():
     (stage / "bin/64bit").mkdir(parents=True)
     (stage / "bin/64bit/.keep").write_text("")
     shutil.copy2(executables[0], stage / "FeatherCast.exe")
+    remuxers = list(build.rglob("feathercast_remux.exe"))
+    if len(remuxers) != 1:
+        raise SystemExit("Build the feathercast_remux helper before packaging.")
+    shutil.copy2(remuxers[0], stage / "feathercast_remux.exe")
     runtime = Path(manifest["obs_runtime"])
     # libobs and codec/graphics dependencies; never package the OBS frontend or
     # its incompatible MSVC Qt libraries into the MinGW Qt application.
