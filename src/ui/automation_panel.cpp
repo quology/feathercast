@@ -44,8 +44,18 @@ QComboBox *combo(const QStringList &names, int index) {
 AutomationPanel::AutomationPanel(engine::Engine *e, QString directory,
                                  QWidget *parent)
     : QWidget(parent), engine(e), path(directory + "/automation.json") {
-  auto l = new QVBoxLayout(this);
+  auto *outer = new QHBoxLayout(this);
+  outer->setContentsMargins(12, 10, 12, 12);
+  outer->setSpacing(16);
+  auto *rulesColumn = new QVBoxLayout;
+  rulesColumn->setSpacing(8);
+  auto *activityColumn = new QVBoxLayout;
+  activityColumn->setSpacing(8);
+  outer->addLayout(rulesColumn, 3);
+  outer->addLayout(activityColumn, 2);
+  auto *l = rulesColumn;
   enabled = new QCheckBox("Enable automation");
+  enabled->setToolTip("Evaluate enabled rules and execute matching actions");
   l->addWidget(enabled);
   fallback = new QComboBox;
   fallback->addItem("No fallback", "");
@@ -55,10 +65,12 @@ AutomationPanel::AutomationPanel(engine::Engine *e, QString directory,
   l->addLayout(f);
   f->addRow("Fallback scene", fallback);
   rulesList = new QListWidget;
+  rulesList->setAccessibleName("Automation rules ordered by priority");
+  rulesList->setMinimumHeight(60);
   l->addWidget(rulesList);
   auto row = new QHBoxLayout;
   l->addLayout(row);
-  button(row, "Add", this, [this] {
+  auto *addRule = button(row, "Add rule", this, [this] {
     Rule r;
     r.id = "Rule " + std::to_string(rules.size() + 1);
     r.any_of = {{{ConditionType::Always}}};
@@ -70,8 +82,11 @@ AutomationPanel::AutomationPanel(engine::Engine *e, QString directory,
       refresh();
     }
   });
-  button(row, "Edit", this, [this] { editRule(rulesList->currentRow()); });
-  button(row, "Remove", this, [this] {
+  addRule->setProperty("variant", "primary");
+  auto *edit = button(row, "Edit", this, [this] { editRule(rulesList->currentRow()); });
+  connect(rulesList, &QListWidget::itemDoubleClicked, this,
+          [this] { editRule(rulesList->currentRow()); });
+  auto *remove = button(row, "Remove", this, [this] {
     int i = rulesList->currentRow();
     if (i >= 0) {
       rules.erase(rules.begin() + i);
@@ -79,8 +94,21 @@ AutomationPanel::AutomationPanel(engine::Engine *e, QString directory,
       save();
     }
   });
+  edit->setEnabled(false);
+  remove->setEnabled(false);
+  connect(rulesList, &QListWidget::currentRowChanged, this, [=](int index) {
+    edit->setEnabled(index >= 0);
+    remove->setEnabled(index >= 0);
+  });
+  auto *activityTitle = new QLabel("Activity");
+  activityTitle->setProperty("role", "section");
+  activityColumn->addWidget(activityTitle);
+  log = new QListWidget;
+  log->setAccessibleName("Automation activity log");
+  log->setMinimumHeight(60);
+  activityColumn->addWidget(log, 1);
   auto io = new QHBoxLayout;
-  l->addLayout(io);
+  activityColumn->addLayout(io);
   button(io, "Import…", this, [this] {
     auto p = QFileDialog::getOpenFileName(this, "Import automation", {},
                                           "JSON (*.json)");
@@ -131,11 +159,8 @@ AutomationPanel::AutomationPanel(engine::Engine *e, QString directory,
                      ? ": matches current snapshot"
                      : ": does not match"));
   });
-  button(l, "Pause automation for 30 seconds", this,
+  button(activityColumn, "Pause automation · 30 seconds", this,
          [this] { manualOverride(); });
-  log = new QListWidget;
-  log->setMaximumHeight(100);
-  l->addWidget(log);
   QFile file(path);
   if (file.open(QIODevice::ReadOnly)) {
     bool on;
@@ -295,10 +320,33 @@ bool AutomationPanel::editRule(int index) {
   auto original = rules[index];
   QDialog dialog(this);
   dialog.setWindowTitle("Automation rule — OR groups / AND conditions");
-  dialog.resize(900, 720);
-  auto layout = new QVBoxLayout(&dialog);
+  dialog.resize(1040, 650);
+  auto *dialogLayout = new QVBoxLayout(&dialog);
+  dialogLayout->setContentsMargins(12, 12, 12, 12);
+  auto *scroll = new QScrollArea;
+  scroll->setWidgetResizable(true);
+  auto *content = new QWidget;
+  scroll->setWidget(content);
+  dialogLayout->addWidget(scroll, 1);
+  auto layout = new QVBoxLayout(content);
+  layout->setContentsMargins(6, 4, 6, 10);
+  layout->setSpacing(10);
+  auto *heading = new QLabel("Automation rule");
+  heading->setProperty("role", "heading");
+  layout->addWidget(heading);
+  auto *description = new QLabel("Match any OR group, then run its actions in order. Every condition in a group must match.");
+  description->setWordWrap(true);
+  description->setProperty("role", "muted");
+  layout->addWidget(description);
   auto form = new QFormLayout;
-  layout->addLayout(form);
+  form->setSpacing(8);
+  auto *timing = new QFormLayout;
+  timing->setSpacing(8);
+  auto *forms = new QHBoxLayout;
+  forms->setSpacing(20);
+  forms->addLayout(form, 1);
+  forms->addLayout(timing, 1);
+  layout->addLayout(forms);
   auto id = new QLineEdit(QString::fromStdString(original.id));
   form->addRow("Unique ID", id);
   auto priority = new QSpinBox;
@@ -311,15 +359,15 @@ bool AutomationPanel::editRule(int index) {
   auto debounce = new QSpinBox;
   debounce->setRange(0, 86400000);
   debounce->setValue(original.debounce_ms);
-  form->addRow("Debounce (ms)", debounce);
+  timing->addRow("Debounce (ms)", debounce);
   auto cooldown = new QSpinBox;
   cooldown->setRange(0, 86400000);
   cooldown->setValue(original.cooldown_ms);
-  form->addRow("Cooldown (ms)", cooldown);
+  timing->addRow("Cooldown (ms)", cooldown);
   auto repeat =
       new QCheckBox("Repeat while winning (requires positive cooldown)");
   repeat->setChecked(original.repeat_while_matching);
-  form->addRow(repeat);
+  timing->addRow(repeat);
   auto groups = new QTabWidget;
   layout->addWidget(groups);
   auto addGroup = [&](const ConditionGroup &group) {
@@ -330,6 +378,9 @@ bool AutomationPanel::editRule(int index) {
     table->setHorizontalHeaderLabels(
         {"Type", "Text / process / hotkey ID", "Number", "Negate"});
     table->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    table->verticalHeader()->setDefaultSectionSize(40);
+    table->setMinimumHeight(100);
+    table->setAccessibleName("AND conditions");
     l->addWidget(table);
     auto add = [=](Condition c) {
       int row = table->rowCount();
@@ -368,6 +419,12 @@ bool AutomationPanel::editRule(int index) {
   table->setHorizontalHeaderLabels(
       {"Action", "Scene / plugin ID / log text", "Value (delay ms)"});
   table->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+  table->verticalHeader()->setDefaultSectionSize(40);
+  table->setMinimumHeight(100);
+  table->setAccessibleName("Ordered rule actions");
+  auto *actionsHeading = new QLabel("Actions · executed in order");
+  actionsHeading->setProperty("role", "section");
+  layout->addWidget(actionsHeading);
   layout->addWidget(table);
   auto addAction = [=](Action a) {
     int r = table->rowCount();
@@ -416,7 +473,7 @@ bool AutomationPanel::editRule(int index) {
   });
   auto box =
       new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel);
-  layout->addWidget(box);
+  dialogLayout->addWidget(box);
   connect(box, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
   connect(box, &QDialogButtonBox::accepted, &dialog, [&] {
     Rule r;
@@ -503,7 +560,10 @@ void AutomationPanel::registerBindings() {
 void AutomationPanel::editHotkeys(QWidget *parent) {
   QDialog d(parent);
   d.setWindowTitle("Global hotkeys");
+  d.resize(580, 520);
   auto f = new QFormLayout(&d);
+  f->setContentsMargins(20, 18, 20, 18);
+  f->setSpacing(12);
   f->addRow(new QLabel(
       "Use Ctrl/Alt/Shift/Win with letters, digits, Space or F1–F24.\nIDs are "
       "also available to automation hotkey conditions (2-second pulse)."));

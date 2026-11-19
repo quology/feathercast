@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Refreshed the Qt workspace with neutral light/dark themes, monochrome primary actions, preview framing and compact tabbed monitoring docks.
+- Added settings category navigation, clearer automation grouping and descriptive scene/source controls while preserving saved dock identities and existing actions.
+
 ## 0.1.0-dev — development preview, 18 November 2026
 
 - Added standalone libobs/D3D11 engine, shared H.264/AAC outputs, MKV recording, replay and RTMP(S) relay.

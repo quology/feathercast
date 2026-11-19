@@ -5,7 +5,98 @@
 #include <QSaveFile>
 #include <QtWidgets>
 using feathercast::engine::Engine;
-static QString darkStyle;
+// Shared neutral tokens keep dialogs, floating docks and both themes consistent.
+static void applyTheme(bool dark) {
+  const QString background = dark ? "#09090b" : "#fafafa";
+  const QString surface = dark ? "#18181b" : "#ffffff";
+  const QString muted = dark ? "#27272a" : "#f4f4f5";
+  const QString border = dark ? "#3f3f46" : "#d4d4d8";
+  const QString text = dark ? "#fafafa" : "#18181b";
+  const QString secondary = dark ? "#a1a1aa" : "#52525b";
+  QPalette palette;
+  palette.setColor(QPalette::Window, QColor(background));
+  palette.setColor(QPalette::WindowText, QColor(text));
+  palette.setColor(QPalette::Base, QColor(surface));
+  palette.setColor(QPalette::AlternateBase, QColor(muted));
+  palette.setColor(QPalette::Text, QColor(text));
+  palette.setColor(QPalette::Button, QColor(surface));
+  palette.setColor(QPalette::ButtonText, QColor(text));
+  palette.setColor(QPalette::Highlight, QColor(muted));
+  palette.setColor(QPalette::HighlightedText, QColor(text));
+  palette.setColor(QPalette::ToolTipBase, QColor(surface));
+  palette.setColor(QPalette::ToolTipText, QColor(text));
+  palette.setColor(QPalette::PlaceholderText, QColor(secondary));
+  palette.setColor(QPalette::Disabled, QPalette::Text, QColor(secondary));
+  palette.setColor(QPalette::Disabled, QPalette::ButtonText, QColor(secondary));
+  qApp->setPalette(palette);
+  QString style = R"(
+    QWidget { color: @text; font-family: "Segoe UI"; font-size: 10pt; }
+    QMainWindow, QDialog { background: @background; }
+    QMainWindow::separator { background: @background; width: 6px; height: 6px; }
+    QMainWindow::separator:hover { background: @border; }
+    QDockWidget { background: @surface; border: 1px solid @border; }
+    QDockWidget::title { background: @surface; padding: 10px 12px; border-bottom: 1px solid @border; font-weight: 600; }
+    QToolBar { background: @surface; border: 0; border-bottom: 1px solid @border; spacing: 12px; padding: 10px 16px; }
+    QLabel[role="heading"] { font-size: 16pt; font-weight: 600; }
+    QLabel[role="section"] { font-weight: 600; padding: 2px 0; }
+    QLabel[role="muted"] { color: @secondary; }
+    QLabel[role="badge"] { background: @muted; color: @secondary; border: 1px solid @border; border-radius: 5px; padding: 4px 8px; font-size: 9pt; }
+    QWidget#previewCard { background: @surface; border: 1px solid @border; border-radius: 8px; }
+    QPushButton { background: @surface; border: 1px solid @border; border-radius: 6px; padding: 6px 12px; min-height: 18px; font-weight: 500; }
+    QPushButton:hover { background: @muted; }
+    QPushButton:pressed { background: @border; }
+    QPushButton:focus, QToolButton:focus { border: 2px solid @secondary; padding: 5px 11px; }
+    QPushButton[variant="primary"], QDialogButtonBox QPushButton:default { background: @text; color: @background; border-color: @text; font-weight: 600; }
+    QPushButton[variant="primary"]:hover, QDialogButtonBox QPushButton:default:hover { background: @secondary; border-color: @secondary; }
+    QPushButton:disabled { background: @muted; color: @secondary; border-color: @border; }
+    QLineEdit, QAbstractSpinBox, QComboBox, QKeySequenceEdit { background: @surface; border: 1px solid @border; border-radius: 6px; padding: 5px 8px; min-height: 20px; selection-background-color: @muted; selection-color: @text; }
+    QLineEdit:focus, QAbstractSpinBox:focus, QComboBox:focus, QKeySequenceEdit:focus { border: 1px solid @secondary; }
+    QComboBox { padding-right: 24px; }
+    QComboBox::drop-down { border: 0; width: 22px; }
+    QComboBox QAbstractItemView { background: @surface; border: 1px solid @border; selection-background-color: @muted; selection-color: @text; padding: 4px; }
+    QListWidget, QTableWidget { background: @surface; alternate-background-color: @muted; border: 1px solid @border; border-radius: 6px; padding: 3px; outline: 0; gridline-color: @border; }
+    QListWidget::item { padding: 7px 9px; border-radius: 4px; }
+    QListWidget::item:hover { background: @muted; }
+    QListWidget::item:selected { background: @muted; color: @text; }
+    QListWidget::item:focus { border: 1px solid @secondary; }
+    QHeaderView::section { background: @muted; border: 0; border-bottom: 1px solid @border; padding: 7px; color: @secondary; font-weight: 500; }
+    QCheckBox { spacing: 8px; padding: 3px 0; }
+    QCheckBox::indicator { width: 16px; height: 16px; }
+    QCheckBox::indicator:unchecked { background: @surface; border: 1px solid @border; border-radius: 4px; }
+    QCheckBox::indicator:unchecked:hover { border-color: @secondary; }
+    QTabWidget::pane { background: @surface; border: 1px solid @border; border-radius: 6px; }
+    QTabBar::tab { background: @background; color: @secondary; padding: 7px 12px; border: 1px solid transparent; }
+    QTabBar::tab:selected { background: @surface; color: @text; border-color: @border; border-radius: 5px; }
+    QTabBar::tab:hover { color: @text; }
+    QMenuBar, QMenu { background: @surface; }
+    QMenuBar { border-bottom: 1px solid @border; padding: 3px 8px; }
+    QMenu { border: 1px solid @border; padding: 4px; }
+    QMenu::item { padding: 7px 24px; border-radius: 4px; }
+    QMenu::item:selected, QMenuBar::item:selected { background: @muted; }
+    QMenu::separator { height: 1px; background: @border; margin: 4px 8px; }
+    QStatusBar { background: @surface; color: @secondary; border-top: 1px solid @border; padding: 3px 8px; }
+    QToolTip { color: @text; background: @surface; border: 1px solid @border; padding: 6px; }
+    QScrollArea { border: 0; background: transparent; }
+    QScrollBar:vertical { background: @background; width: 10px; margin: 0; }
+    QScrollBar::handle:vertical { background: @border; border-radius: 4px; min-height: 24px; }
+    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+    QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
+    QSlider::groove:horizontal { height: 4px; background: @border; border-radius: 2px; }
+    QSlider::handle:horizontal { background: @text; width: 14px; margin: -5px 0; border-radius: 7px; }
+  )";
+  style.replace("@background", background).replace("@surface", surface)
+      .replace("@muted", muted).replace("@border", border)
+      .replace("@text", text).replace("@secondary", secondary);
+  qApp->setStyleSheet(style);
+}
+static QLabel *label(const QString &text, const char *role) {
+  auto *result = new QLabel(text);
+  result->setProperty("role", role);
+  return result;
+}
+static void section(QBoxLayout *layout, const QString &title) {
+  layout->addWidget(label(title, "section"));
+}
 
 class Preview : public QWidget {
 public:
@@ -13,7 +104,8 @@ public:
   explicit Preview(Engine *e) : engine(e) {
     setAttribute(Qt::WA_NativeWindow);
     setMinimumSize(320, 180);
-    setStyleSheet("background:#111318;");
+    setStyleSheet("background:#09090b;");
+    setAccessibleName("Live scene preview");
   }
   void resizeEvent(QResizeEvent *event) override {
     QWidget::resizeEvent(event);
@@ -57,6 +149,10 @@ class Window : public QMainWindow {
     auto d = new QDockWidget(title, this);
     d->setObjectName(title);
     d->setWidget(widget);
+    if (auto *layout = widget->layout()) {
+      layout->setContentsMargins(12, 10, 12, 12);
+      layout->setSpacing(8);
+    }
     addDockWidget(area, d);
     return d;
   }
@@ -245,7 +341,20 @@ public:
     QDir().mkpath(dir);
     config = dir + "/engine.json";
     setWindowTitle("FeatherCast");
-    resize(1220, 760);
+    resize(1280, 800);
+    auto *header = addToolBar("Workspace");
+    header->setObjectName("WorkspaceHeader");
+    header->setMovable(false);
+    header->setFloatable(false);
+    header->addWidget(label("FeatherCast", "heading"));
+    header->addWidget(label("Broadcast workspace", "muted"));
+    auto *headerSpace = new QWidget;
+    headerSpace->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    header->addWidget(headerSpace);
+    auto *settingsButton = new QPushButton("Settings");
+    settingsButton->setToolTip("Configure streaming, output and appearance");
+    header->addWidget(settingsButton);
+    connect(settingsButton, &QPushButton::clicked, this, [this] { settingsDialog(); });
     setDockOptions(AllowNestedDocks | AllowTabbedDocks | AnimatedDocks);
     connect(&remuxProcess, &QProcess::finished, this,
             [this](int code, QProcess::ExitStatus state) {
@@ -281,21 +390,34 @@ public:
       engine.addSource("Scene", "color", "Background");
     }
     preview = new Preview(&engine);
-    setCentralWidget(preview);
+    auto *previewCard = new QWidget;
+    previewCard->setObjectName("previewCard");
+    auto *previewLayout = new QVBoxLayout(previewCard);
+    previewLayout->setContentsMargins(12, 10, 12, 12);
+    previewLayout->setSpacing(10);
+    auto *previewHeading = new QHBoxLayout;
+    previewHeading->addWidget(label("Preview", "section"));
+    previewHeading->addStretch();
+    previewHeading->addWidget(label("LIVE CANVAS", "badge"));
+    previewLayout->addLayout(previewHeading);
+    previewLayout->addWidget(preview, 1);
+    setCentralWidget(previewCard);
     auto sceneBox = new QWidget;
     auto sl = new QVBoxLayout(sceneBox);
     scenes = new QListWidget;
+    scenes->setAccessibleName("Scenes");
+    scenes->setMinimumWidth(150);
     sl->addWidget(scenes);
     auto sr = new QHBoxLayout;
     sl->addLayout(sr);
-    button("+", sr, [this] {
+    button("Add scene", sr, [this] {
       bool ok = false;
       auto n = QInputDialog::getText(this, "Add scene", "Name",
                                      QLineEdit::Normal, {}, &ok);
       if (ok)
         engine.addScene(n);
     });
-    button("−", sr, [this] {
+    button("Remove", sr, [this] {
       if (scenes->currentItem())
         engine.removeScene(scenes->currentItem()->text());
     });
@@ -303,16 +425,19 @@ public:
     auto sourceBox = new QWidget;
     auto sol = new QVBoxLayout(sourceBox);
     sources = new QListWidget;
+    sources->setAccessibleName("Sources and visibility");
+    sources->setMinimumWidth(150);
     sol->addWidget(sources);
     auto sor = new QHBoxLayout;
     sol->addLayout(sor);
-    button("+", sor, [this] { addSource(); });
-    button("−", sor, [this] {
+    button("Add source", sor, [this] { addSource(); });
+    button("Remove", sor, [this] {
       if (sources->currentItem())
         engine.removeSource(engine.currentScene(),
                             sources->currentItem()->text());
     });
-    button("Audio…", sor, [this] { audioDialog(); });
+    auto *sourceAudio = button("Audio…", sol, [this] { audioDialog(); });
+    sourceAudio->setToolTip("Adjust volume and mute for the selected source");
     dock("Sources", sourceBox, Qt::LeftDockWidgetArea);
     connect(scenes, &QListWidget::currentTextChanged, this,
             [this](const QString &s) {
@@ -333,27 +458,28 @@ public:
     connect(&engine, &Engine::scenesChanged, this, [this] { refreshScenes(); });
     auto controls = new QWidget;
     auto cl = new QVBoxLayout(controls);
+    section(cl, "Broadcast");
     stream = button("Start streaming", cl, [this] {
       engine.statistics()["streaming"].toBool() ? engine.stopStreaming()
                                                 : void(engine.startStreaming());
     });
+    stream->setProperty("variant", "primary");
     record = button("Start recording", cl, [this] {
       engine.statistics()["recording"].toBool() ? engine.stopRecording()
                                                 : void(engine.startRecording());
     });
+    section(cl, "Replay buffer");
     replay = button("Start replay buffer", cl, [this] {
       engine.statistics()["replay"].toBool() ? engine.stopReplay()
                                              : void(engine.startReplay());
     });
     save = button("Save replay", cl, [this] { engine.saveReplay(); });
+    section(cl, "Recording tools");
     button("Remux MKV to MP4…", cl, [this] { remuxDialog(); });
     button("Cancel remux", cl, [this] {
       if (remuxProcess.state() != QProcess::NotRunning)
         remuxProcess.kill();
     });
-    button("Global hotkeys…", cl,
-           [this] { automationPanel->editHotkeys(this); });
-    button("Settings…", cl, [this] { settingsDialog(); });
     cl->addStretch();
     dock("Controls", controls, Qt::RightDockWidgetArea);
     auto dw = new QWidget;
@@ -362,8 +488,11 @@ public:
     for (int n : {0, 15, 30, 60, 90, 120})
       presets->addItem(QString::number(n) + " s", n);
     presets->addItem("Custom", -1);
+    dl->addWidget(label("Delay preset", "muted"));
+    presets->setAccessibleName("Stream delay preset");
     dl->addWidget(presets);
     delay = new QSpinBox;
+    delay->setAccessibleName("Target stream delay in seconds");
     delay->setRange(0, 300);
     delay->setSuffix(" s");
     delay->setValue(engine.settings()["delayMs"].toInt() / 1000);
@@ -380,20 +509,27 @@ public:
     auto warning = new QLabel("Increasing delay holds output. Decreasing cuts "
                               "content. Holds may disconnect the server.");
     warning->setWordWrap(true);
-    warning->setMinimumHeight(70);
+    warning->setProperty("role", "muted");
     dl->addWidget(warning);
-    dock("Stream delay", dw, Qt::RightDockWidgetArea);
+    auto *delayDock = dock("Stream delay", dw, Qt::BottomDockWidgetArea);
     meters = new QLabel;
     meters->setMargin(8);
     meters->setWordWrap(true);
-    dock("Audio meters", meters, Qt::BottomDockWidgetArea);
+    auto *audioDock = dock("Audio meters", meters, Qt::BottomDockWidgetArea);
     stats = new QLabel;
     stats->setAlignment(Qt::AlignTop | Qt::AlignLeft);
     stats->setWordWrap(true);
     stats->setMargin(8);
-    dock("Statistics", stats, Qt::BottomDockWidgetArea);
+    auto *statsDock = dock("Statistics", stats, Qt::BottomDockWidgetArea);
     automationPanel = new feathercast::ui::AutomationPanel(&engine, dir, this);
-    dock("Automation", automationPanel, Qt::BottomDockWidgetArea);
+    auto *automationDock = dock("Automation", automationPanel, Qt::BottomDockWidgetArea);
+    tabifyDockWidget(delayDock, audioDock);
+    tabifyDockWidget(audioDock, statsDock);
+    tabifyDockWidget(statsDock, automationDock);
+    statsDock->raise();
+    resizeDocks({findChildren<QDockWidget *>().first()}, {225}, Qt::Horizontal);
+    resizeDocks({statsDock}, {190}, Qt::Vertical);
+    statusBar()->showMessage("Ready · Your workspace is saved automatically", 6000);
     auto view = menuBar()->addMenu("View");
     for (auto d : findChildren<QDockWidget *>())
       view->addAction(d->toggleViewAction());
@@ -402,6 +538,8 @@ public:
     previewToggle->setChecked(engine.settings()["previewEnabled"].toBool());
     connect(previewToggle, &QAction::toggled, this,
             [this](bool on) { engine.setPreviewEnabled(on); });
+    menuBar()->addAction("Global hotkeys…", this,
+                        [this] { automationPanel->editHotkeys(this); });
     menuBar()->addAction("Settings…", this, [this] { settingsDialog(); });
     QSettings ui(dir + "/ui.ini", QSettings::IniFormat);
     ui.beginGroup("visibility");
@@ -464,15 +602,36 @@ public:
 void Window::settingsDialog() {
   QDialog d(this);
   d.setWindowTitle("Settings");
-  d.resize(720, 520);
+  d.resize(900, 620);
   auto outer = new QVBoxLayout(&d);
-  auto tabs = new QTabWidget;
-  outer->addWidget(tabs);
+  outer->setContentsMargins(20, 18, 20, 18);
+  outer->setSpacing(14);
+  outer->addWidget(label("Settings", "heading"));
+  outer->addWidget(label("Configure your broadcast and workspace.", "muted"));
+  auto *body = new QHBoxLayout;
+  body->setSpacing(16);
+  auto *navigation = new QListWidget;
+  navigation->setAccessibleName("Settings categories");
+  navigation->setFixedWidth(180);
+  auto *tabs = new QStackedWidget;
+  body->addWidget(navigation);
+  body->addWidget(tabs, 1);
+  outer->addLayout(body, 1);
+  connect(navigation, &QListWidget::currentRowChanged, tabs,
+          &QStackedWidget::setCurrentIndex);
   auto s = engine.settings();
   auto page = [&](QString name) {
     auto w = new QWidget;
     auto f = new QFormLayout(w);
-    tabs->addTab(w, name);
+    f->setContentsMargins(16, 14, 16, 14);
+    f->setSpacing(12);
+    f->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    f->addRow(label(name, "section"));
+    auto *scroll = new QScrollArea;
+    scroll->setWidgetResizable(true);
+    scroll->setWidget(w);
+    tabs->addWidget(scroll);
+    navigation->addItem(name);
     return f;
   };
   auto number = [&](QFormLayout *f, QString label, QString key, int min,
@@ -647,9 +806,12 @@ void Window::settingsDialog() {
       return;
     engine.setPreviewEnabled(previewOn->isChecked());
     themeSettings.setValue("theme", theme->currentIndex());
-    qApp->setStyleSheet(theme->currentIndex() == 0 ? darkStyle : QString());
+    applyTheme(theme->currentIndex() == 0);
     d.accept();
   });
+  navigation->setCurrentRow(0);
+  for (auto *note : d.findChildren<QLabel *>())
+    note->setWordWrap(true);
   d.exec();
 }
 int main(int argc, char **argv) {
@@ -682,24 +844,8 @@ int main(int argc, char **argv) {
                                          QString::number(qHash(dir)));
   }
   app.setStyle("Fusion");
-  app.setStyleSheet(
-      "QWidget{background:#20242c;color:#e8ebf2;font-size:10pt} "
-      "QMainWindow,QDialog{background:#191c23} "
-      "QDockWidget::title{background:#292f3a;padding:7px;font-weight:600} "
-      "QPushButton{background:#343c4b;border:1px solid "
-      "#4a5568;border-radius:4px;padding:6px 10px} "
-      "QPushButton:hover{background:#445168} "
-      "QPushButton:disabled{color:#7b8290} "
-      "QListWidget,QLineEdit,QSpinBox,QComboBox{background:#14171d;border:1px "
-      "solid #414958;border-radius:3px;padding:4px} "
-      "QMenuBar,QMenu{background:#252a34} "
-      "QMenu::item:selected{background:#43516a} QTabWidget::pane{border:1px "
-      "solid #414958} QTabBar::tab{padding:6px;background:#292f3a} "
-      "QTabBar::tab:selected{background:#43516a}");
-  darkStyle = app.styleSheet();
   QSettings themeSettings(dir + "/ui.ini", QSettings::IniFormat);
-  if (themeSettings.value("theme", 0).toInt() == 1)
-    app.setStyleSheet({});
+  applyTheme(themeSettings.value("theme", 0).toInt() != 1);
   int testExit = 0;
   Window window(dir, parser.isSet(smoke) || parser.isSet(selftest));
   window.show();

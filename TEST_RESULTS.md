@@ -1,5 +1,13 @@
 # Verified test results
 
+## UI refresh — 19 November 2026
+
+- Full Release build with pinned Qt 6.8.3 and MinGW 13.1: passed.
+- Release CTest: 3/3 passed (credential storage, automation configuration, core).
+- Integrated `--ui-self-test` with isolated configurations: all 12 Boolean checks passed in both dark and light themes; both timed launches exited 0.
+- Main-window widget screenshots reviewed in both themes at the default 1280 × 800 logical size (approximately 1600 × 1000 at host scaling). No clipped main-window controls observed. Native libobs preview content is not captured by `QWidget::grab`.
+- Interactive settings/rule-editor inspection and smaller display sizes remain unverified: the test window disappeared before computer-use interaction could complete. Backend performance and live broadcasting were not retested for this UI change.
+
 Updated: 18 November 2026. Backend tests below were performed on 17 November unless stated otherwise. System: Windows x64, AMD Ryzen 7 9800X3D, NVIDIA GeForce RTX
 4070. This record lists actual completed checks; pending items have not passed.
 
