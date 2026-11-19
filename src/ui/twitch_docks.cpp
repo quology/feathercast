@@ -4,6 +4,17 @@
 #include <QJsonArray>
 
 namespace feathercast::ui {
+static QString activityLabel(const QString &type) {
+  static const QMap<QString, QString> labels{{"channel.follow", "Follows"}, {"channel.subscribe", "New subscriptions"},
+    {"channel.subscription.message", "Resubscriptions"}, {"channel.subscription.gift", "Gift subscriptions"}, {"channel.cheer", "Cheers"},
+    {"channel.raid", "Incoming raids"}, {"channel.goal.begin", "Goal started"}, {"channel.goal.progress", "Goal progress"}, {"channel.goal.end", "Goal ended"}};
+  return labels.value(type, "Activity");
+}
+static QString goalLabel(const QString &type) {
+  static const QMap<QString, QString> labels{{"follow", "Followers"}, {"subscription", "Subscriber points"}, {"subscription_count", "Subscribers"},
+    {"new_subscription", "New subscriber points"}, {"new_subscription_count", "New subscribers"}, {"new_bit", "Bits"}, {"new_cheerer", "New cheerers"}};
+  return labels.value(type, "Goal");
+}
 void installTwitchDocks(QMainWindow *window, const QString &directory) {
   auto *service = new twitch::TwitchService(directory, window);
   auto *info = new QWidget;
@@ -69,7 +80,7 @@ void installTwitchDocks(QMainWindow *window, const QString &directory) {
   form->addRow("Title", title); form->addRow("Category", searchRow); form->addRow("Selection", categories); form->addRow("Tags", tags);
   layout->addWidget(editor);
   auto *save = new QPushButton("Save channel information"); layout->addWidget(save);
-  auto *note = new QLabel("Changes are sent only when you click Save. Twitch status updates every 30 seconds. Connecting does not start a broadcast.");
+  auto *note = new QLabel("Changes are sent only when you click Save. Twitch status updates every 30 seconds. New authorization requests read access for follows, subscriptions, bits and goals. Existing chat tokens continue to work; reauthorize to enable activity permissions. Connecting does not start a broadcast.");
   note->setWordWrap(true); layout->addWidget(note); layout->addStretch();
   auto dirty = std::make_shared<bool>(false);
   QObject::connect(title, &QLineEdit::textEdited, info, [dirty] { *dirty = true; });
@@ -124,6 +135,60 @@ void installTwitchDocks(QMainWindow *window, const QString &directory) {
   auto *chatDock = new QDockWidget("Twitch chat", window); chatDock->setObjectName("Twitch chat"); chatDock->setWidget(chat);
   window->addDockWidget(Qt::RightDockWidgetArea, chatDock);
   window->tabifyDockWidget(infoDock, chatDock); infoDock->raise();
+  auto *reauthorize = new QPushButton("Reauthorize activity permissions");
+  reauthorize->setObjectName("twitchReauthorize"); layout->insertWidget(2, reauthorize);
+  QObject::connect(reauthorize, &QPushButton::clicked, info, [service, client] { service->connectAccount(client->text()); });
+
+  auto *activity = new QWidget; auto *activityLayout = new QVBoxLayout(activity);
+  auto *activityNote = new QLabel("Live events since connection. Dismiss affects only this local feed; external alerts have their own dashboard.");
+  activityNote->setWordWrap(true); activityNote->setTextFormat(Qt::PlainText); activityLayout->addWidget(activityNote);
+  auto *filter = new QComboBox; filter->setObjectName("twitchActivityFilter"); filter->setAccessibleName("Filter Twitch activity");
+  filter->addItem("All activity", "");
+  const QList<QPair<QString, QString>> filters{{"Follows", "channel.follow"}, {"Subscriptions", "channel.subscribe"},
+    {"Resubscriptions", "channel.subscription.message"}, {"Gift subscriptions", "channel.subscription.gift"},
+    {"Cheers", "channel.cheer"}, {"Raids", "channel.raid"}, {"Goals", "channel.goal."}};
+  for (const auto &entry : filters) filter->addItem(entry.first, entry.second);
+  activityLayout->addWidget(filter);
+  auto *feed = new QListWidget; feed->setObjectName("twitchActivityFeed"); feed->setAccessibleName("Twitch activity feed"); activityLayout->addWidget(feed, 1);
+  auto applyFilter = [filter, feed] { const auto selected = filter->currentData().toString();
+    for (int i = 0; i < feed->count(); ++i) feed->item(i)->setHidden(!selected.isEmpty() && !feed->item(i)->data(Qt::UserRole).toString().startsWith(selected)); };
+  QObject::connect(filter, &QComboBox::currentIndexChanged, activity, applyFilter);
+  QObject::connect(service, &twitch::TwitchService::activityReceived, activity, [feed, applyFilter](const QJsonObject &event) {
+    QString text = event["text"].toString().left(1000); text.replace('\n', ' '); text.replace('\r', ' ');
+    auto *item = new QListWidgetItem(event["timestamp"].toString().left(50) + "  " + text, feed);
+    item->setData(Qt::UserRole, event["type"].toString());
+    while (feed->count() > 500) delete feed->takeItem(0);
+    applyFilter(); feed->scrollToBottom();
+  });
+  auto *feedActions = new QHBoxLayout;
+  auto *dismiss = new QPushButton("Dismiss selected"); dismiss->setObjectName("twitchActivityDismiss");
+  auto *clear = new QPushButton("Clear feed"); clear->setObjectName("twitchActivityClear"); feedActions->addWidget(dismiss); feedActions->addWidget(clear); activityLayout->addLayout(feedActions);
+  QObject::connect(dismiss, &QPushButton::clicked, activity, [feed] { delete feed->takeItem(feed->currentRow()); });
+  QObject::connect(clear, &QPushButton::clicked, feed, &QListWidget::clear);
+  auto *availability = new QPlainTextEdit; availability->setObjectName("twitchActivityStatus"); availability->setReadOnly(true); availability->setMaximumHeight(110); activityLayout->addWidget(availability);
+  auto states = std::make_shared<QMap<QString, QString>>();
+  QObject::connect(service, &twitch::TwitchService::activityStateChanged, activity, [states, availability](const QString &type, const QString &state) {
+    (*states)[type] = state; QStringList lines; for (auto it = states->cbegin(); it != states->cend(); ++it) lines.append(activityLabel(it.key()) + ": " + it.value()); availability->setPlainText(lines.join('\n'));
+  });
+  auto *activityDock = new QDockWidget("Twitch activity feed", window); activityDock->setObjectName("Twitch activity feed"); activityDock->setWidget(activity); window->addDockWidget(Qt::RightDockWidgetArea, activityDock);
+  auto *stats = new QWidget; auto *statsLayout = new QVBoxLayout(stats); statsLayout->addWidget(live);
+  auto *totals = new QLabel("Followers: unavailable\nSubscribers: unavailable\nSubscriber points: unavailable\nLifetime channel views: unavailable (not provided by Twitch)");
+  totals->setObjectName("twitchStatistics"); totals->setTextFormat(Qt::PlainText); totals->setWordWrap(true); statsLayout->addWidget(totals);
+  QObject::connect(service, &twitch::TwitchService::statisticsReceived, stats, [totals](const QJsonObject &o) {
+    auto number = [&o](const QString &key) { return o.contains(key) ? QString::number(o[key].toDouble(), 'f', 0) : QString("unavailable"); };
+    totals->setText("Followers: " + number("followers") + "\nSubscribers: " + number("subscribers") + "\nSubscriber points: " + number("points") +
+      "\nLifetime channel views: unavailable (not provided by Twitch)\n" + o["followers_status"].toString() + "\n" + o["subscribers_status"].toString() + "\nGoals: " + o["goals_status"].toString());
+  });
+  auto *goalList = new QListWidget; goalList->setObjectName("twitchGoals"); goalList->setAccessibleName("Active Twitch goals"); statsLayout->addWidget(goalList);
+  QObject::connect(service, &twitch::TwitchService::goalsReceived, stats, [goalList](const QJsonArray &goals) {
+    goalList->clear(); for (const auto &value : goals) { const auto goal = value.toObject(); goalList->addItem(goal["description"].toString() + " (" + goalLabel(goal["type"].toString()) + "): " + QString::number(goal["current_amount"].toInt()) + "/" + QString::number(goal["target_amount"].toInt())); }
+  });
+  auto *statsDock = new QDockWidget("Twitch stats", window); statsDock->setObjectName("Twitch stats"); statsDock->setWidget(stats); window->addDockWidget(Qt::RightDockWidgetArea, statsDock);
+  window->tabifyDockWidget(infoDock, activityDock); window->tabifyDockWidget(infoDock, statsDock);
+  QObject::connect(service, &twitch::TwitchService::connectionChanged, activity, [feed, goalList, states, availability, totals](bool connected, const QString &) {
+    if (!connected) { feed->clear(); goalList->clear(); states->clear(); availability->clear(); totals->setText("Followers: unavailable\nSubscribers: unavailable\nSubscriber points: unavailable\nLifetime channel views: unavailable (not provided by Twitch)"); }
+  });
+  activityDock->hide(); statsDock->hide();
   QObject::connect(service, &twitch::TwitchService::connectionChanged, info,
       [=](bool connected, const QString &name) {
     account->setText(connected ? "Connected as " + name : "No Twitch account connected");

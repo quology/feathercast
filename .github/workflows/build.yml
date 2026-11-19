@@ -1,7 +1,7 @@
 name: Build and test
 on:
   push:
-    branches: [main, develop, 'feature/**', 'fix/**', 'optimization/**']
+    branches: [main, develop, 'codex/**', 'feature/**', 'fix/**', 'optimization/**']
     paths: ['src/**', 'include/**', 'tests/**', 'examples/**', 'CMakeLists.txt', 'scripts/**', 'requirements-build.txt', '.github/workflows/**']
   pull_request:
     paths: ['src/**', 'include/**', 'tests/**', 'examples/**', 'CMakeLists.txt', 'scripts/**', 'requirements-build.txt', '.github/workflows/**']

@@ -17,6 +17,13 @@
 
 namespace feathercast::twitch {
 QStringList requiredScopes() { return {"channel:manage:broadcast", "user:read:chat", "user:write:chat"}; }
+QStringList activityScopes() { return {"moderator:read:followers", "channel:read:subscriptions", "bits:read", "channel:read:goals"}; }
+static const QMap<QString, QString> activityTypes{
+  {"channel.follow", "moderator:read:followers"}, {"channel.subscribe", "channel:read:subscriptions"},
+  {"channel.subscription.message", "channel:read:subscriptions"}, {"channel.subscription.gift", "channel:read:subscriptions"},
+  {"channel.cheer", "bits:read"}, {"channel.raid", ""}, {"channel.goal.begin", "channel:read:goals"},
+  {"channel.goal.progress", "channel:read:goals"}, {"channel.goal.end", "channel:read:goals"}};
+static QString plain(QString value, int limit = 500) { value = value.left(limit); value.replace('\r', ' '); value.replace('\n', ' '); return value; }
 bool validMetadata(const QString &title, const QStringList &tags) {
   if (title.trimmed().isEmpty() || title.toUcs4().size() > 140 || tags.size() > 10) return false;
   QSet<QString> unique;
@@ -135,6 +142,8 @@ void TwitchService::endSession(bool erase) {
   auto replies = replies_; replies_.clear();
   for (auto *reply : replies) reply->abort();
   refreshQueue_.clear(); blockedUntil_.clear(); seenEvents_.clear(); eventIds_.clear();
+  scopes_.clear(); revokedTypes_.clear(); statistics_ = {}; goals_.clear(); pendingStats_.clear();
+  emit statisticsReceived({}); emit goalsReceived({});
   access_.clear(); refresh_.clear(); user_.clear(); login_.clear(); device_.clear();
   if (erase && sessionLock_.isLocked() && QFile::exists(path_) && !QFile::remove(path_))
     emit statusMessage("Could not remove saved Twitch credentials. Remove twitch.tokens from your profile before restarting.");
@@ -182,7 +191,7 @@ void TwitchService::connectAccount(const QString &id) {
   if (!QRegularExpression("^[A-Za-z0-9]{5,128}$").match(client_).hasMatch()) { sessionLock_.unlock(); emit statusMessage("Enter a valid public Twitch Client ID."); return; }
   devicePending_ = true;
   emit statusMessage("Requesting Twitch authorization…");
-  oauth("device", {{"client_id", client_}, {"scopes", requiredScopes().join(' ')}}, [this](int status, QJsonObject data) {
+  oauth("device", {{"client_id", client_}, {"scopes", (requiredScopes() + activityScopes()).join(' ')}}, [this](int status, QJsonObject data) {
     const QUrl url(data["verification_uri"].toString());
     if (status != 200 || data["device_code"].toString().isEmpty() || data["user_code"].toString().isEmpty() ||
         url.scheme() != "https" || url.host() != "www.twitch.tv" || !url.userInfo().isEmpty() || data["expires_in"].toInt() <= 0) {
@@ -198,7 +207,7 @@ void TwitchService::connectAccount(const QString &id) {
 void TwitchService::pollDevice() {
   if (!devicePending_) return;
   if (QDateTime::currentDateTimeUtc() >= deviceExpiry_) { devicePending_ = false; device_.clear(); sessionLock_.unlock(); emit deviceAuthorization({}, {}); emit statusMessage("Twitch authorization expired. Connect again."); return; }
-  oauth("token", {{"client_id", client_}, {"device_code", device_}, {"scopes", requiredScopes().join(' ')},
+  oauth("token", {{"client_id", client_}, {"device_code", device_}, {"scopes", (requiredScopes() + activityScopes()).join(' ')},
       {"grant_type", "urn:ietf:params:oauth:grant-type:device_code"}}, [this](int status, QJsonObject data) {
     if (status == 200) { devicePending_ = false; device_.clear(); if (acceptTokens(data)) validate(); return; }
     const auto error = data["error"].toString(data["message"].toString());
@@ -226,6 +235,7 @@ void TwitchService::validate(bool afterRefresh) {
       emit statusMessage(transient ? "Twitch validation unavailable. Use Connect to retry saved credentials." : "Twitch authorization is invalid or lacks required permissions. Connect again.");
       return;
     }
+    scopes_.clear(); for (const auto &scope : scopes) scopes_.insert(scope.toString());
     user_ = data["user_id"].toString(); login_ = data["login"].toString();
     const bool first = !online_; online_ = true;
     validateTimer_.start(60 * 60 * 1000);
@@ -269,6 +279,7 @@ void TwitchService::api(Work work) {
   const auto body = work.body.isEmpty() ? QByteArray{} : QJsonDocument(work.body).toJson(QJsonDocument::Compact);
   raw(method, url, body,
       "application/json", true, [this, work = std::move(work), sentToken](int status, QJsonObject data) mutable {
+    if (work.optional && ((status == 401 && work.retried) || status == 403)) { if (work.done) work.done(status, data); return; }
     if (status == 401 && !work.retried) {
       work.retried = true;
       if (sentToken != access_) { api(std::move(work)); return; }
@@ -285,6 +296,7 @@ void TwitchService::api(Work work) {
 }
 void TwitchService::pollStatus() {
   if (!online_) return;
+  pollStatistics();
   api({"GET", "streams?user_id=" + user_, {}, [this](int code, QJsonObject o) {
     if (code == 200 && o["data"].isArray()) {
       const auto streams = o["data"].toArray();
@@ -381,6 +393,8 @@ void TwitchService::handleEvent(QWebSocket *ws, bool transferred, const QString 
     watchdog_.setInterval(std::clamp(session["keepalive_timeout_seconds"].toInt(10), 10, 600) * 1000 + 1000);
     watchdog_.start();
     if (transferred) { socketBackoff_ = 1000; emit chatStateChanged("Chat connected"); return; }
+    revokedTypes_.clear();
+    subscribeActivity(id, ws);
     api({"POST", "eventsub/subscriptions", {{"type", "channel.chat.message"}, {"version", "1"},
       {"condition", QJsonObject{{"broadcaster_user_id", user_}, {"user_id", user_}}},
       {"transport", QJsonObject{{"method", "websocket"}, {"session_id", id}}}},
@@ -392,12 +406,15 @@ void TwitchService::handleEvent(QWebSocket *ws, bool transferred, const QString 
       }});
   } else if (type == "session_keepalive" || type == "notification") {
     if (ws == socket_) watchdog_.start();
-    if (type != "notification" || meta["subscription_type"].toString() != "channel.chat.message") return;
+    if (type != "notification") return;
+    const auto subscriptionType = meta["subscription_type"].toString();
+    if (subscriptionType != "channel.chat.message" && !activityTypes.contains(subscriptionType)) return;
     const auto id = meta["message_id"].toString();
-    if (id.isEmpty() || seenEvents_.contains(id)) return;
+    if (id.isEmpty() || id.size() > 200 || seenEvents_.contains(id)) return;
     seenEvents_.insert(id); eventIds_.enqueue(id);
     while (eventIds_.size() > 1000) seenEvents_.remove(eventIds_.dequeue());
     const auto event = payload["event"].toObject();
+    if (subscriptionType != "channel.chat.message") { receiveActivity(subscriptionType, event, meta); return; }
     if (event["broadcaster_user_id"].toString() != user_) return;
     emit chatReceived(event["chatter_user_name"].toString().left(100), event["message"].toObject()["text"].toString().left(2000));
   } else if (type == "session_reconnect") {
@@ -405,9 +422,107 @@ void TwitchService::handleEvent(QWebSocket *ws, bool transferred, const QString 
     if (validReconnectUrl(url)) openSocket(url, true);
     else { emit chatStateChanged("Twitch sent an invalid chat reconnect address"); ws->abort(); }
   } else if (type == "revocation") {
-    const auto reason = payload["subscription"].toObject()["status"].toString();
+    const auto subscription = payload["subscription"].toObject();
+    const auto revokedType = subscription["type"].toString();
+    if (revokedType != "channel.chat.message") {
+      if (activityTypes.contains(revokedType)) {
+        revokedTypes_.insert(revokedType);
+        emit activityStateChanged(revokedType, "Revoked; reauthorize activity permissions to retry");
+        if (revokedType.startsWith("channel.goal.")) { ++goalRevision_; goals_.clear(); publishGoals(); statistics_["goals_status"] = "Unavailable; reauthorize activity permissions"; }
+        if (revokedType.startsWith("channel.subscri")) { statistics_.remove("subscribers"); statistics_.remove("points"); statistics_["subscribers_status"] = "Unavailable; reauthorize activity permissions"; }
+        emit statisticsReceived(statistics_);
+      }
+      return;
+    }
+    const auto reason = subscription["status"].toString();
     if (reason == "authorization_revoked" || reason == "user_removed") { endSession(true); emit statusMessage("Twitch authorization was revoked. Connect again."); }
     else { ws->disconnect(this); ws->abort(); watchdog_.stop(); emit chatStateChanged("Chat subscription revoked. Reconnect your account to retry."); }
   }
+}
+
+void TwitchService::publishGoals() {
+  QJsonArray values; for (auto it = goals_.cbegin(); it != goals_.cend(); ++it) values.append(it.value());
+  emit goalsReceived(values);
+}
+void TwitchService::pollStatistics() {
+  struct Request { QString key, scope, path; };
+  const QList<Request> requests{{"followers", "", "channels/followers"},
+      {"subscribers", "channel:read:subscriptions", "subscriptions"}, {"goals", "channel:read:goals", "goals"}};
+  for (const auto &request : requests) {
+    const auto key = request.key;
+    if (!request.scope.isEmpty() && !scopes_.contains(request.scope)) {
+      statistics_.remove(key); if (key == "subscribers") statistics_.remove("points");
+      statistics_[key + "_status"] = "Unavailable; reauthorize activity permissions"; continue;
+    }
+    if (pendingStats_.contains(key)) continue;
+    pendingStats_.insert(key);
+    const auto revision = goalRevision_;
+    api({"GET", request.path + "?broadcaster_id=" + user_, {}, [this, key, revision](int code, QJsonObject data) {
+      pendingStats_.remove(key);
+      const bool valid = code == 200 && (key == "goals" ? data["data"].isArray() :
+        data["total"].isDouble() && data["total"].toDouble(-1) >= 0 &&
+        (key != "subscribers" || (data["points"].isDouble() && data["points"].toDouble(-1) >= 0)));
+      statistics_[key + "_status"] = valid ? "Available" : "Unavailable; check permissions or retry later";
+      if (key == "goals") {
+        if (revision != goalRevision_) { emit statisticsReceived(statistics_); return; }
+        goals_.clear();
+        if (valid) for (const auto &value : data["data"].toArray()) {
+          const auto goal = value.toObject(); const auto id = goal["id"].toString().left(100);
+          if (id.isEmpty() || goal["broadcaster_id"].toString() != user_ || goals_.size() >= 100) continue;
+          goals_.insert(id, {{"id", id}, {"type", plain(goal["type"].toString(), 50)}, {"description", plain(goal["description"].toString())},
+            {"current_amount", goal["current_amount"]}, {"target_amount", goal["target_amount"]}});
+        }
+        publishGoals();
+      } else {
+        statistics_.remove(key); if (key == "subscribers") statistics_.remove("points");
+        if (valid) { statistics_[key] = data["total"]; if (key == "subscribers") statistics_["points"] = data["points"]; }
+      }
+      emit statisticsReceived(statistics_);
+    }, false, true});
+  }
+  emit statisticsReceived(statistics_);
+}
+void TwitchService::subscribeActivity(const QString &session, QWebSocket *ws) {
+  for (auto it = activityTypes.cbegin(); it != activityTypes.cend(); ++it) {
+    const auto type = it.key();
+    if (!it.value().isEmpty() && !scopes_.contains(it.value())) {
+      emit activityStateChanged(type, "Unavailable; reauthorize activity permissions"); continue;
+    }
+    QJsonObject condition{{"broadcaster_user_id", user_}};
+    if (type == "channel.follow") condition["moderator_user_id"] = user_;
+    if (type == "channel.raid") condition = {{"to_broadcaster_user_id", user_}};
+    api({"POST", "eventsub/subscriptions", {{"type", type}, {"version", type == "channel.follow" ? "2" : "1"},
+      {"condition", condition}, {"transport", QJsonObject{{"method", "websocket"}, {"session_id", session}}}},
+      [this, type, ws = QPointer<QWebSocket>(ws)](int code, QJsonObject) {
+        if (!ws || ws != socket_) return;
+        emit activityStateChanged(type, code == 202 ? "Receiving live events" : "Unavailable; subscription rejected. Reconnect to retry");
+      }, false, true});
+  }
+}
+void TwitchService::receiveActivity(const QString &type, const QJsonObject &event, const QJsonObject &metadata) {
+  if (event[type == "channel.raid" ? "to_broadcaster_user_id" : "broadcaster_user_id"].toString() != user_) return;
+  if (revokedTypes_.contains(type)) return;
+  const auto scope = activityTypes.value(type);
+  if (!scope.isEmpty() && !scopes_.contains(scope)) return;
+  const auto name = plain(event["user_name"].toString(), 100);
+  QString text;
+  if (type == "channel.follow") text = name + " followed";
+  else if (type == "channel.subscribe") text = name + (event["is_gift"].toBool() ? " received a gift subscription" : " subscribed") + " (tier " + plain(event["tier"].toString(), 10) + ")";
+  else if (type == "channel.subscription.message") text = name + " resubscribed for " + QString::number(event["cumulative_months"].toInt()) + " months: " + plain(event["message"].toObject()["text"].toString());
+  else if (type == "channel.subscription.gift") text = (event["is_anonymous"].toBool() ? "Anonymous" : name) + " gifted " + QString::number(event["total"].toInt()) + " subscriptions";
+  else if (type == "channel.cheer") text = (event["is_anonymous"].toBool() ? "Anonymous" : name) + " cheered " + QString::number(event["bits"].toInt()) + " bits: " + plain(event["message"].toString());
+  else if (type == "channel.raid") text = plain(event["from_broadcaster_user_name"].toString(), 100) + " raided with " + QString::number(event["viewers"].toInt()) + " viewers";
+  else if (type.startsWith("channel.goal.")) {
+    const auto id = event["id"].toString().left(100); if (id.isEmpty()) return;
+    ++goalRevision_;
+    QJsonObject goal{{"id", id}, {"type", plain(event["type"].toString(), 50)}, {"description", plain(event["description"].toString())},
+      {"current_amount", event["current_amount"]}, {"target_amount", event["target_amount"]}};
+    if (type == "channel.goal.end") goals_.remove(id);
+    else if (goals_.contains(id) || goals_.size() < 100) goals_.insert(id, goal);
+    publishGoals();
+    text = (type == "channel.goal.begin" ? QString("Goal started") : type == "channel.goal.end" ? QString("Goal ended") : QString("Goal progress")) + ": " + goal["description"].toString() + " (" + QString::number(event["current_amount"].toInt()) + "/" + QString::number(event["target_amount"].toInt()) + ")";
+  }
+  if (!text.isEmpty()) emit activityReceived({{"id", metadata["message_id"].toString().left(200)}, {"type", type},
+    {"timestamp", metadata["message_timestamp"].toString().left(50)}, {"text", text.left(1000)}});
 }
 } // namespace feathercast::twitch

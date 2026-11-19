@@ -20,6 +20,7 @@ struct Endpoints {
   QUrl events{"wss://eventsub.wss.twitch.tv/ws"};
 };
 QStringList requiredScopes();
+QStringList activityScopes();
 bool validMetadata(const QString &title, const QStringList &tags);
 bool validReconnectUrl(const QUrl &url);
 QByteArray protectTokens(const QByteArray &plain);
@@ -42,6 +43,10 @@ public:
   void sendChat(const QString &message);
   void pollStatus();
 signals:
+  void activityReceived(const QJsonObject &activity);
+  void activityStateChanged(const QString &type, const QString &state);
+  void statisticsReceived(const QJsonObject &statistics);
+  void goalsReceived(const QJsonArray &goals);
   void connectionChanged(bool connected, const QString &account);
   void statusMessage(const QString &message);
   void deviceAuthorization(const QUrl &url, const QString &code);
@@ -55,7 +60,7 @@ signals:
   void channelUpdateFinished(bool saved);
 private:
   using Callback = std::function<void(int, QJsonObject)>;
-  struct Work { QByteArray method; QString path; QJsonObject body; Callback done; bool retried{}; };
+  struct Work { QByteArray method; QString path; QJsonObject body; Callback done; bool retried{}; bool optional{}; };
   QString path_, client_, access_, refresh_, user_, login_, device_;
   QLockFile sessionLock_;
   Endpoints endpoints_;
@@ -71,6 +76,14 @@ private:
   QPointer<QWebSocket> socket_, replacement_;
   QQueue<QString> eventIds_;
   QSet<QString> seenEvents_;
+  QSet<QString> scopes_, pendingStats_, revokedTypes_;
+  quint64 goalRevision_{};
+  QJsonObject statistics_;
+  QHash<QString, QJsonObject> goals_;
+  void pollStatistics();
+  void publishGoals();
+  void subscribeActivity(const QString &session, QWebSocket *socket);
+  void receiveActivity(const QString &type, const QJsonObject &event, const QJsonObject &metadata);
   void raw(const QByteArray &method, const QUrl &url, const QByteArray &body,
            const QByteArray &contentType, bool auth, Callback done);
   void oauth(const QString &endpoint, const QMap<QString, QString> &form, Callback done);

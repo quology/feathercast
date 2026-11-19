@@ -167,3 +167,13 @@ scope intentionally excludes window/game video sources (use Application Audio).
 Source capture-audio topology remains a creation-time option. Video filter support
 is the advertised three native types, not every OBS filter. No virtual-camera
 implementation, long soak or performance improvement is claimed.
+
+
+## 2026-11-19 — Twitch activity feed and statistics workspace stage
+
+- `./scripts/build.ps1 -SkipBootstrap -Configuration Release`: Release native app/service/UI fixture compilation passed; CTest **5/5 passed**. Expanded loopback fixtures use fake tokens and local HTTP/WebSocket only; no Twitch account was authorized and no real chat was sent.
+- Protocol evidence: original base-only token retained (DPAPI/profile locking unchanged), base follower total available, optional subscriber/points totals unavailable without scopes; all nine activity types; follow v2 condition; bounded payload strings; duplicate/foreign broadcaster suppression; optional subscription denial/revocation leaves chat healthy; all authorized types resubscribe on a fresh socket; dedup survives reconnect. HTTP totals/goals success and unavailable failures covered. Delayed goal snapshot cannot overwrite a newer progress event.
+- Production Qt evidence: four optional docks, existing metadata/chat behavior retained; 500-entry literal plain-text activity list; working type filter/dismiss/clear; zero versus unavailable totals; account disconnect clears activity/statistics/goals. Existing credential storage, automation and core tests also passed.
+- `git diff --check`: passed. CI push branch filter now includes `codex/**`.
+- Limitations: no authenticated Twitch/account eligibility or real activity test; Twitch-directed WSS transfer retains existing code path and still needs real-account handoff validation. Feed is live only and local Dismiss does not control third-party alert playback. Lifetime channel views unavailable because Twitch no longer provides them.
+- Model log records requested overrides with null runtime evidence; execution identity was not independently exposed.
