@@ -113,9 +113,16 @@ bool Engine::duplicateScene(const QString& name, const QString& replacement) {
         names[row["name"].toString()] = candidate;
         if (!addSource(replacement, row["type"].toString(), candidate, properties)) { removeScene(replacement); return false; }
     }
+    // Complete the native hierarchy before restoring any transforms: adding a
+    // later child resizes its groups and would otherwise move already-restored
+    // ancestor origins. Import uses the same hierarchy-then-layout ordering.
     for (auto value : original) {
-        auto row = value.toObject(); if (!names.contains(row["name"].toString())) continue; auto target = names[row["name"].toString()];
-        if (!row["parent"].toString().isEmpty()) moveSource(replacement, target, names[row["parent"].toString()], 1000);
+        const auto row = value.toObject(); if (!names.contains(row["name"].toString())) continue;
+        if (!row["parent"].toString().isEmpty()) moveSource(replacement, names[row["name"].toString()], names[row["parent"].toString()], 1000);
+    }
+    for (auto value : original) {
+        const auto row = value.toObject(); if (!names.contains(row["name"].toString())) continue;
+        const auto target = names[row["name"].toString()];
         setSourceTransform(replacement, target, row["transform"].toObject()); setSourceVisible(replacement, target, row["visible"].toBool(true));
     }
     for (auto value : original) { auto row = value.toObject(); if (names.contains(row["name"].toString())) setSourceLocked(replacement, names[row["name"].toString()], row["locked"].toBool()); }
@@ -205,12 +212,39 @@ bool Engine::moveSource(const QString& scene, const QString& name, const QString
 }
 QJsonObject Engine::sourceTransform(const QString& scene, const QString& name) const {
     auto found = d->scenes.find(scene); if (found == d->scenes.end()) return {};
-    auto* item = publicSceneItem(found->scene, name); return item ? readTransform(item) : QJsonObject{};
+    QJsonObject result;
+    sceneAtomic(found->scene, [&] { if (auto* item = publicSceneItem(found->scene, name)) result = readTransform(item); });
+    return result;
+}
+QJsonObject Engine::sourceWorldTransform(const QString& scene, const QString& name) const {
+    auto found = d->scenes.find(scene); if (found == d->scenes.end() || d->row(*found, name) < 0) return {};
+    QJsonObject result;
+    sceneAtomic(found->scene, [&] {
+        matrix4 world{}; matrix4_identity(&world);
+        for (auto current = name; !current.isEmpty();) {
+            auto* item = publicSceneItem(found->scene, current); if (!item) return;
+            matrix4 local{}; obs_sceneitem_get_draw_transform(item, &local); matrix4_mul(&world, &world, &local);
+            current = found->sources[d->row(*found, current)].toObject()["parent"].toString();
+        }
+        result = {{"m11", world.x.x}, {"m12", world.x.y}, {"m21", world.y.x}, {"m22", world.y.y}, {"dx", world.t.x}, {"dy", world.t.y}};
+    });
+    return result;
 }
 bool Engine::setSourceTransform(const QString& scene, const QString& name, const QJsonObject& patch) {
     auto found = d->scenes.find(scene); if (found == d->scenes.end() || d->locked(*found, name) || !validTransform(patch)) return false;
     auto* item = publicSceneItem(found->scene, name); if (!item) return false;
-    writeTransform(item, patch); emit scenesChanged(); return true;
+    sceneAtomic(found->scene, [&] {
+        writeTransform(item, patch);
+        if (obs_sceneitem_is_group(item)) {
+            // A nested group's pending position must reach its draw matrix before
+            // a child's resize uses that matrix to rebase the group's origin.
+            obs_sceneitem_force_update_transform(item);
+            const auto parent = found->sources[d->row(*found, name)].toObject()["parent"].toString();
+            if (!parent.isEmpty()) if (auto* ancestor = publicSceneItem(found->scene, parent)) {
+                obs_sceneitem_defer_group_resize_begin(ancestor); obs_sceneitem_defer_group_resize_end(ancestor);
+            }
+        }
+    }); emit scenesChanged(); return true;
 }
 QJsonObject Engine::sourceProperties(const QString& scene, const QString& name) const {
     auto found = d->scenes.find(scene); if (found == d->scenes.end()) return {};

@@ -1,5 +1,10 @@
 # Feature status — 19 November 2026
 
+## Workspace controls — 19 November 2026
+
+The native workspace exposes scene and source hierarchy edits, visibility/locks, source settings and transforms, supported video and microphone filters, a measured audio mixer, Studio preview/program transitions and Twitch activity/chat/stats docks. The workspace has one profile and one scene collection. Video filters are limited to the catalog supplied by the engine; capture-audio topology is chosen at creation. Game and window sources cannot themselves be made global; use Application Audio. GPU utilization is unavailable. Virtual camera is not included.
+
+
 Implemented features and environment-specific verification are distinct.
 
 | Area | Implemented / verified | Limits |

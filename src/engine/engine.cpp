@@ -4,6 +4,8 @@
 #include "microphone_filters.hpp"
 #include <obs.h>
 #include <obs-audio-controls.h>
+#include <graphics/matrix4.h>
+#include <type_traits>
 #include <QSet>
 #include <util/platform.h>
 #include <QCoreApplication>
@@ -39,6 +41,26 @@
 namespace feathercast::engine {
 namespace {
 std::atomic<bool> engineOwned{false};
+// OBS group bounds rebase child positions and the group origin during render.
+// Take/edit the whole root-scene layout under the same recursive scene lock.
+// The callback is synchronous; no borrowed callback state survives this call.
+template<class F> void sceneAtomic(obs_scene_t* scene, F&& action) {
+    obs_scene_atomic_update(scene, [](void* data, obs_scene_t*) {
+        (*static_cast<std::remove_reference_t<F>*>(data))();
+    }, &action);
+}
+// OBS33's first render marks scene_size_changed. A group with pending local
+// offsets then recenters its children without translating the group origin.
+// Initialize the EMPTY scene first, before adding any capture sources or layout.
+// This is a private target and cannot activate audio or change program output.
+bool initializeSceneCanvas(obs_scene_t* scene) {
+    obs_enter_graphics();
+    auto* target = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
+    const bool started = target && gs_texrender_begin(target, 1, 1);
+    if (started) { obs_source_video_render(obs_scene_get_source(scene)); gs_texrender_end(target); }
+    gs_texrender_destroy(target); obs_leave_graphics();
+    return started;
+}
 bool validTransform(const QJsonObject& patch);
 QString normalizeVideoFilters(QJsonArray& chain);
 QString applyVideoFilters(obs_source_t* source, const QJsonArray& before, const QJsonArray& after);
@@ -278,6 +300,8 @@ struct Engine::Impl {
     obs_source_t* transition{};
     obs_display_t* programDisplay{};
     os_cpu_usage_info_t* cpu{};
+    uint64_t cpuSampleNs{};
+    double cpuPercent{};
     std::atomic<uint64_t> streamStarted{}, recordingStarted{}, replayStarted{};
     int row(const Scene& scene, const QString& name) const {
         for (int i = 0; i < scene.sources.size(); ++i) if (scene.sources[i].toObject()["name"] == name) return i;
@@ -507,7 +531,7 @@ bool Engine::initialize(QString runtimeRoot, QJsonObject settings) {
     d->previewView = obs_view_create();
     d->transition = obs_source_create_private("fade_transition", "VELA program transition", nullptr);
     if (!d->previewView || !d->transition) { shutdown(); return d->fail("OBS preview/transition runtime unavailable"); }
-    d->cpu = os_cpu_usage_info_start();
+    d->cpu = os_cpu_usage_info_start(); d->cpuSampleNs = os_gettime_ns(); d->cpuPercent = 0;
     d->startedNs = os_gettime_ns();
     emit stateChanged(); return true;
 }
@@ -723,6 +747,7 @@ bool Engine::addScene(const QString& name) {
     if (!d->ready || name.trimmed().isEmpty() || name.size() > 128 || name.contains(QChar(0)) || d->scenes.size() >= 128 || d->scenes.contains(name)) return d->fail("Invalid or duplicate scene");
     if (auto* existing = obs_get_source_by_name(name.toUtf8().constData())) { obs_source_release(existing); return d->fail("Names must be unique"); }
     auto* scene = obs_scene_create(name.toUtf8().constData()); if (!scene) return d->fail("Could not create scene");
+    if (!initializeSceneCanvas(scene)) { obs_source_remove(obs_scene_get_source(scene)); obs_scene_release(scene); return d->fail("Could not initialize scene canvas"); }
     d->scenes.insert(name, {scene, {}}); d->sceneOrder.append(name); if (d->selected.isEmpty()) selectScene(name);
     emit scenesChanged(); return true;
 }
@@ -867,15 +892,17 @@ bool Engine::removeSource(const QString& scene, const QString& name) {
 QJsonArray Engine::sources(const QString& scene) const {
     auto it = d->scenes.find(scene); if (it == d->scenes.end()) return {};
     QJsonArray result; QMap<QString, int> positions;
-    for (auto value : it->sources) {
-        auto entry = value.toObject(); const auto name = entry["name"].toString();
-        entry["parent"] = entry["parent"].toString(); entry["order"] = positions[entry["parent"].toString()]++;
-        if (auto* item = publicSceneItem(it->scene, name)) {
-            entry["visible"] = obs_sceneitem_visible(item); entry["locked"] = obs_sceneitem_locked(item);
-            entry["transform"] = sourceTransform(scene, name);
+    sceneAtomic(it->scene, [&] {
+        for (auto value : it->sources) {
+            auto entry = value.toObject(); const auto name = entry["name"].toString();
+            entry["parent"] = entry["parent"].toString(); entry["order"] = positions[entry["parent"].toString()]++;
+            if (auto* item = publicSceneItem(it->scene, name)) {
+                entry["visible"] = obs_sceneitem_visible(item); entry["locked"] = obs_sceneitem_locked(item);
+                entry["transform"] = sourceTransform(scene, name);
+            }
+            result.append(entry);
         }
-        result.append(entry);
-    }
+    });
     return result;
 }
 bool Engine::sourceAudioAvailable(const QString& type) const {
@@ -1127,7 +1154,12 @@ QJsonObject Engine::statistics() const {
     if (!d->ready) return result;
     result["studioMode"] = studioMode(); result["programScene"] = d->program;
     result["transitionActive"] = d->transition && obs_transition_is_active(d->transition);
-    result["cpuPercent"] = d->cpu ? os_cpu_usage_info_query(d->cpu) : 0;
+    const auto cpuNow = os_gettime_ns();
+    if (d->cpu && cpuNow - d->cpuSampleNs >= 500000000ULL) {
+        const double sample = os_cpu_usage_info_query(d->cpu); d->cpuSampleNs = cpuNow;
+        if (std::isfinite(sample) && sample >= 0) d->cpuPercent = sample;
+    }
+    result["cpuPercent"] = d->cpuPercent;
     const auto elapsed = [](obs_output_t* output, uint64_t start) -> double { return active(output) && start ? double(os_gettime_ns() - start) / 1000000 : 0; };
     result["streamDurationMs"] = elapsed(d->stream, d->streamStarted);
     result["recordingDurationMs"] = elapsed(d->recording, d->recordingStarted);

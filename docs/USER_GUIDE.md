@@ -1,5 +1,14 @@
 # VELA user guide
 
+## Workspace
+
+Scenes can be renamed, duplicated and reordered. Sources can be grouped, moved, renamed, reordered, hidden or locked; a locked source or parent group prevents edits. Properties opens source-specific settings and transforms; Filters edits supported microphone or video filters. Source visibility and locks are stored with the engine configuration.
+
+The Audio Mixer displays measured source peaks, gain, mute, monitoring and scene/global scope. Hide removes a strip from the mixer without muting it; Show hidden sources restores strips. Global audio is supported for audio-only sources and display companions. Use Application Audio for global game or window audio. Duplicating a scene leaves existing global audio owned by the original scene.
+
+Studio Mode separates preview and program. Select a scene to preview it, then use Take or Cut in Scene Transitions. The selected transition and duration determine Take. Disabling preview drawing does not stop output; Enable Preview restores it. View → Reset Workspace Layout restores the default docks. The application retains a single profile and scene collection.
+
+
 VELA opens a safe color scene on a fresh profile. Add scenes and sources with the + buttons. Display, window, game and audio devices activate only when explicitly added. Open **Advanced Audio Properties** from Sources or the View menu to adjust source audio. The Audio meters dock displays actual libobs peak readings in dBFS, with silence or an expired reading shown as -100 dBFS. The automation audio condition uses the loudest current source peak.
 
 The top menu provides File, Edit, View, Docks, Profile, Scene Collection, Tools and Help. Use Docks to show or hide workspace and Twitch docks, File for Settings and folders, and Tools for global hotkeys and remuxing. Profile and Scene Collection indicate the current single configuration; switching between multiple profiles or collections is not supported.

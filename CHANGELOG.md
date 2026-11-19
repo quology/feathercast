@@ -1,5 +1,12 @@
 # Changelog
 
+## Workspace controls — 19 November 2026
+
+- Added native scene ordering, duplication and renaming; source groups, ordering, visibility, locking, properties, transforms and video filters.
+- Added an audio mixer using measured libobs peaks and actual gain, mute, monitoring and scene/global settings; added Studio Mode, transitions, disabled-preview recovery and measured status.
+- Added a resettable dock layout with Twitch activity, chat and stats. Virtual camera is not included.
+
+
 ## Unreleased
 
 - Added a compact eight-menu workspace bar with dock toggles and existing scene, source, settings and tool actions.

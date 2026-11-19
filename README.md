@@ -1,5 +1,8 @@
 # VELA
 
+The workspace provides scene and source hierarchy editing, source properties and transforms, video and microphone filters, an audio mixer, Studio preview/program and transitions, Twitch docks, and live output status. The View menu can reset the dock layout. See the user guide for operating details.
+
+
 VELA (Video Encoding and Livestreaming Application), formerly FeatherCast, is a native Windows broadcasting application using C++20, Qt 6 and standalone libobs. No running OBS Studio instance is required. This private **0.1.0-dev.1 development preview** is not stable v1 or full OBS feature parity.
 
 ## Implemented features

@@ -85,6 +85,24 @@ view/global scene/transition references released before draining OBS destruction
   `boundsAlignment`, `cropLeft`, `cropTop`, `cropRight`, `cropBottom`. Numeric ranges
   are validated, nonfinite values and unknown keys rejected. Bounds/alignment use
   the native OBS enums/bits. Changes are applied in a deferred native item update.
+  Positions are parent-local. OBS automatically rebases group bounds: a child at
+  local X=37 may become local X≈0 while its group moves to X=37, retaining canvas
+  placement. Editors must refresh controls and their displayed baselines together;
+  unchanged Apply must not resubmit an old coordinate after rebasing.
+  `sourceWorldTransform(scene,name)` returns the composed native draw matrix as
+  `m11,m12,m21,m22,dx,dy`: X=m11*x+m21*y+dx; Y=m12*x+m22*y+dy. It includes all
+  ancestor groups. Deferred group updates settle on the next render tick, so
+  immediate readback is not a promise that a pending edit has rendered.
+  Native layout reads/writes and each scene's persisted parent/child snapshot use
+  `obs_scene_atomic_update` to exclude concurrent group rebasing. New empty scenes
+  initialize their native canvas dimensions on a private 1×1 render target before
+  items are added; this prevents OBS33's first-render resize path from discarding
+  saved child offsets. It neither activates capture/audio nor changes program.
+  Nested group edits also update the native group draw matrix before child bounds
+  can rebase it; ancestor bounds are then scheduled for recalculation. Duplication
+  builds the complete hierarchy before restoring layout, since adding a child can
+  resize previously created groups. Local group origins can therefore normalize
+  after copy/load; rendered leaf placement is the persistence contract.
 - `videoFilterTypes`, `videoFilters`, `setVideoFilters` expose native Color
   Correction, Chroma Key and Crop/Pad when registered. Chains have at most 16 rows
   `{id,name,type,enabled,settings}`; type IDs are `color_filter`,
@@ -121,7 +139,9 @@ activation. Removing the owner removes global routing. `mixer_hidden` does not m
 `replayDurationMs`, `programScene`, `studioMode`, and `transitionActive`. Durations
 begin on genuine OBS output start signals and are zero while stopped; reconnect
 signals do not reset them. Existing actual FPS, frame-time, byte and audio-meter
-fields remain available.
+fields remain available. CPU is sampled at most once per 500 ms and finite samples
+are cached for all readers; rapid mixer/status polling does not query the native
+CPU sampler back-to-back. Zero is the initial value before the first sample.
 
 ### Persisted collection
 

@@ -85,13 +85,35 @@ int main(int argc, char** argv) {
     check(e.sources("Copy").size() == e.sources("Main").size() - 1, "duplicate skips already global audio input");
     waitMs(150);
     check(std::abs(rms.load() - rmsBeforeDuplicate) < .006, "duplicating global audio does not double output");
-    for (auto value : e.sources("Main")) { const auto row = value.toObject(); if (row["name"] == "Sound") continue; check(e.sourceTransform("Main", row["name"].toString()) == e.sourceTransform("Copy", "Copy / " + row["name"].toString()), "duplicate transforms match"); }
+    e.selectScene("Copy"); e.takePreview("cut"); waitMs(150);
+    for (auto value : e.sources("Main")) {
+        const auto row = value.toObject(); if (row["name"] == "Sound" || row["type"] == "group") continue;
+        const auto original = e.sourceWorldTransform("Main", row["name"].toString()), duplicate = e.sourceWorldTransform("Copy", "Copy / " + row["name"].toString());
+        bool same = !original.isEmpty();
+        for (auto it = original.begin(); it != original.end(); ++it) same &= duplicate.contains(it.key()) && std::abs(it.value().toDouble() - duplicate[it.key()].toDouble()) < .01;
+        if (!same) { QFile diagnostic(directory + "/duplicate-world-difference.json"); diagnostic.open(QIODevice::WriteOnly); diagnostic.write(QJsonDocument(QJsonObject{{"original", original}, {"duplicate", duplicate}, {"original_rows", e.sources("Main")}, {"duplicate_rows", e.sources("Copy")}}).toJson()); }
+        check(same, "duplicate preserves rendered placement");
+    }
+    e.selectScene("Main"); e.takePreview("cut");
     check(e.removeScene("Copy"), "remove duplicate"); waitMs(150); check(std::abs(rms.load() - rmsBeforeDuplicate) < .006, "removing duplicate preserves global audio");
     e.setSourceLocked("Main", "Red", true); const auto before = e.sources("Main");
+    QJsonObject leafWorldBefore;
+    for (auto value : before) { const auto row = value.toObject(); if (row["type"] != "group") leafWorldBefore[row["name"].toString()] = e.sourceWorldTransform("Main", row["name"].toString()); }
     check(e.saveConfiguration(directory + "/workspace.json"), "save layout");
     check(e.loadConfiguration(directory + "/workspace.json"), "transactional roundtrip");
-    const auto after = e.sources("Main");
-    check(e.scenes() == QStringList{"B", "Main"} && before == after, "full order/groups/transforms/locks/properties roundtrip");
+    waitMs(150); const auto after = e.sources("Main");
+    auto comparableLayout = [](QJsonArray rows) {
+        for (int i = 0; i < rows.size(); ++i) { auto row = rows[i].toObject(); auto transform = row["transform"].toObject(); transform.remove("x"); transform.remove("y"); row["transform"] = transform; rows[i] = row; }
+        return rows;
+    };
+    bool placementPreserved = true;
+    for (auto it = leafWorldBefore.begin(); it != leafWorldBefore.end(); ++it) {
+        const auto original = it.value().toObject(), restored = e.sourceWorldTransform("Main", it.key());
+        for (auto component = original.begin(); component != original.end(); ++component)
+            placementPreserved &= restored.contains(component.key()) && std::abs(component.value().toDouble() - restored[component.key()].toDouble()) < .01;
+    }
+    check(e.scenes() == QStringList{"B", "Main"} && comparableLayout(before) == comparableLayout(after) && placementPreserved, "order/groups/locks/properties and rendered placement roundtrip");
+
     check(e.audioProperties("Sound")["scope"] == "global" && e.audioProperties("Sound")["mixer_hidden"].toBool(), "global mixer settings roundtrip");
     QFile saved(directory + "/workspace.json"); saved.open(QIODevice::ReadOnly); auto doc = QJsonDocument::fromJson(saved.readAll()).object(); saved.close();
     auto failedDoc = doc; auto failedScenes = failedDoc["scenes"].toArray(); auto failedScene = failedScenes[0].toObject(); auto failedRows = failedScene["sources"].toArray();

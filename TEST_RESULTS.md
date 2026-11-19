@@ -1,5 +1,14 @@
 # Verified test results
 
+## Workspace UI — 19 November 2026
+
+- `scripts/build.ps1 -SkipBootstrap -Configuration Release` passed; CTest passed 5/5. The existing integrated UI self-test passed all 12 Boolean checks in an isolated profile.
+- The native D3D11 workspace fixture used only a synthetic color and test tone and passed 12 controller checks: hierarchy/selection, visibility/locking, source property and transform Apply, video filter add/bypass/reorder/edit/remove, mixer gain/mute/global/hide/show, Studio take, transition controls, preview-off recovery and configuration save. A second process verified persisted hierarchy, audio and Studio transition. Monitoring-device changes and real capture targets were not exercised by this fixture.
+- Dark and light QWidget captures were saved under `outputs/workspace-ui/handoff-*.png` and the later `offscreen-check.png` for 1920×1080 and 1366×768. QWidget capture excludes the native preview/program HWND content. Twitch was disconnected and no account activity or messages were generated. At the smaller size, dock contents may require scrolling.
+- One earlier grouped-color test intermittently read a local x near zero after editing width and x=37; width read back as 1281. Group recentering and world placement/save-reload semantics require investigation. The current fixture exercises rotation instead and does not establish that position behavior. Evidence is retained in `outputs/workspace-ui/review-dark-1920x1080-profile/engine.json` and its JSON result.
+- Actual authenticated Twitch behavior and live application capture remain manual verification items. The fixture does not replace the engine's separate native integration tests.
+
+
 ## Workspace menu — 19 November 2026
 
 - Release build passed and CTest passed 5/5. An isolated UI self-test passed all 12 Boolean checks.
@@ -177,3 +186,52 @@ implementation, long soak or performance improvement is claimed.
 - `git diff --check`: passed. CI push branch filter now includes `codex/**`.
 - Limitations: no authenticated Twitch/account eligibility or real activity test; Twitch-directed WSS transfer retains existing code path and still needs real-account handoff validation. Feed is live only and local Dismiss does not control third-party alert playback. Lifetime channel views unavailable because Twitch no longer provides them.
 - Model log records requested overrides with null runtime evidence; execution identity was not independently exposed.
+
+
+## 2026-11-19 — Group coordinates and idempotent Properties Apply
+
+The earlier grouped-position issue was reproduced, diagnosed and fixed. It was
+not resolved by substituting a rotation assertion. In an offscreen production
+Properties dialog, changing fitted color width1280→1281 and local X=37 retained
+world X≈37 after the first Apply. OBS correctly rebased the group to X=37 and the
+child to X≈0. An unchanged third Apply then moved world X to≈74 because the old
+editor compared a stale X=37 widget against its refreshed native X≈0 baseline.
+Preserved failure: `work/coordinate-before-fix/coordinates.json`.
+
+The editor now refreshes clean controls and their displayed baselines together,
+including native group rebasing, and preserves unsaved user edits. The fixture
+again tests actual X=37, with four unchanged Applies and native composed matrices.
+A second regression test found pending-save reload loss: coherent saved parent115
+plus child11 (intended world126) restored to parent115/child0/world115 even after
+100ms. OBS33 treats a newly created scene's first render as a canvas resize and
+omits the compensating group-origin move in that path. Initializing the empty
+scene's native canvas before population fixes this without event-loop reentry or
+capture activation. Preserved failure: `work/coordinate-pending-repro/coordinates.json`.
+Nested group restoration also required forcing its native draw matrix before child
+bounds recalculation. Duplication now finishes all reparenting before restoring
+transforms, preventing later child insertion from moving restored ancestors.
+The existing workspace fixture now compares composed rendered leaf placement and
+exact non-position state, rather than requiring group-local origins to stay
+identical after legitimate native rebasing. It caught a duplicate-placement failure
+before that ordering fix; both strengthened duplicate and reload checks now pass.
+
+Final checks:
+
+- Release build and CTest5/5 passed (`work/coordinate-build.log`).
+- New explicit `feathercast_workspace_coordinates_smoke` passed: four stable
+  Applies, pending editor changes preserved, 144 coherent parent/child saves during
+  active render, six immediate-save/reload cases retaining intended placement,
+  independent native matrix composition through nested rotated/scaled groups,
+  duplicate/reload placement, and100 immediate CPU reads returning one finite
+  cached sample. Evidence: `work/coordinate-final4/coordinates.json`
+  and `.log` alongside that directory (`work/coordinate-final4.log`).
+- Fresh hidden production UI fixture passed14 Boolean checks, including world
+  position, repeated Apply, refreshed local coordinate, and all preceding workspace
+  controls. Separate restart passed4 checks including saved world placement:
+  `work/coordinate-ui-final-20261119c/ui.json` and `reload.json`.
+- Existing native workspace engine fixture passed with zero unexpected OBS errors
+  and clean shutdown (`work/coordinate-final4-workspace.log`).
+
+Fixtures used only generated color/tone sources and isolated profiles. Dialogs and
+fixture application windows stayed offscreen; these checks establish geometry and
+controller behavior, not a new visible-desktop layout or real-capture benchmark.

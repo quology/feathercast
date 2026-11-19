@@ -58,7 +58,12 @@ public:
     QJsonObject sourceProperties(const QString& scene, const QString& name) const;
     QJsonArray sourcePropertySchema(const QString& scene, const QString& name) const;
     bool setSourceProperties(const QString& scene, const QString& name, const QJsonObject& patch);
+    // Parent-local native coordinates. OBS may rebase group/child origins while
+    // retaining world placement. Snapshots and edits are scene-atomic.
     QJsonObject sourceTransform(const QString& scene, const QString& name) const;
+    // Current native draw-matrix composition: m11,m12,m21,m22,dx,dy, composing the item's
+    // draw matrix through all groups. Pending edits settle on the next video tick.
+    QJsonObject sourceWorldTransform(const QString& scene, const QString& name) const;
     bool setSourceTransform(const QString& scene, const QString& name, const QJsonObject& patch);
     bool sourceAudioAvailable(const QString& type) const;
     void setSourceVisible(const QString& scene, const QString& name, bool visible);
