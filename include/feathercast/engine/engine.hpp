@@ -32,6 +32,17 @@ public:
     bool addScene(const QString& name);
     bool removeScene(const QString& name);
     bool selectScene(const QString& name);
+    bool renameScene(const QString& name, const QString& replacement);
+    bool duplicateScene(const QString& name, const QString& replacement);
+    bool moveScene(const QString& name, int position);
+    bool studioMode() const;
+    void setStudioMode(bool enabled);
+    QString programScene() const;
+    QJsonArray transitionTypes() const;
+    bool setTransition(const QString& type, int durationMs);
+    bool takePreview(const QString& type = {}); // empty uses configured transition
+    void attachProgram(quintptr nativeWindow, int width, int height);
+    void resizeProgram(int width, int height);
     // Types: desktop, window, game, color, microphone, desktop_audio, application_audio, test_tone.
     // capture_audio enables window/game audio; desktop also requires audio_window.
     // separate_audio_track reserves recording_track 2..6, keeping audio in mix 1.
@@ -39,6 +50,16 @@ public:
     bool removeSource(const QString& scene, const QString& name);
     QJsonArray sources(const QString& scene) const;
     QJsonArray sourceOptions(const QString& type) const;
+    bool renameSource(const QString& scene, const QString& name, const QString& replacement);
+    bool addGroup(const QString& scene, const QString& name);
+    bool setSourceLocked(const QString& scene, const QString& name, bool locked);
+    // Position is zero-based within siblings, bottom to top. Empty group means root.
+    bool moveSource(const QString& scene, const QString& name, const QString& group, int position);
+    QJsonObject sourceProperties(const QString& scene, const QString& name) const;
+    QJsonArray sourcePropertySchema(const QString& scene, const QString& name) const;
+    bool setSourceProperties(const QString& scene, const QString& name, const QJsonObject& patch);
+    QJsonObject sourceTransform(const QString& scene, const QString& name) const;
+    bool setSourceTransform(const QString& scene, const QString& name, const QJsonObject& patch);
     bool sourceAudioAvailable(const QString& type) const;
     void setSourceVisible(const QString& scene, const QString& name, bool visible);
     // Each row contains name, scene, active and the canonical audio properties.
@@ -52,6 +73,9 @@ public:
     bool isMicrophone(const QString& name) const;
     QJsonArray microphoneFilters(const QString& name) const;
     bool setMicrophoneFilters(const QString& name, QJsonArray filters);
+    QJsonArray videoFilterTypes() const;
+    QJsonArray videoFilters(const QString& scene, const QString& name) const;
+    bool setVideoFilters(const QString& scene, const QString& name, QJsonArray filters);
     bool audioMonitoringAvailable() const;
     bool recordingActive() const;
     void setSourceAudio(const QString& name, double volume, bool muted);

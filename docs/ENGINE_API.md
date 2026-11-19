@@ -16,7 +16,7 @@
 - Give `attachPreview` a native HWND from a QWidget with `WA_NativeWindow`; resize through `resizePreview`. Call `attachPreview(0,0,0)` before destroying that HWND. `setPreviewEnabled` only affects display drawing.
 - Start/stop streaming, recording and replay independently. Poll `statistics()` at a modest interval and also react to `stateChanged`, `errorOccurred` and `replaySaved`. Output start is asynchronous; `relayConnected` shows actual transport connection. `saveReplay()` requests asynchronous MKV creation.
 - Set delay through `setDelayMs`. Target range is 0–300000 ms; effective delay is approximate to keyframe granularity. Increasing holds output; decreasing cuts content at a keyframe. `delayDroppedPackets` includes intentional audio/video cuts, not solely bandwidth loss.
-- `automationSnapshot()` supplies running processes, foreground/title and output state. Feed it to the portable `AutomationEngine`; dispatch returned actions to this API on the controller thread. Audio peak metering and hotkey collection are not yet populated by this backend. Do not render fictional audio levels or GPU/CPU counters.
+- `automationSnapshot()` supplies running processes, foreground/title and output state. Feed it to the portable `AutomationEngine`; dispatch returned actions to this API on the controller thread. Audio peaks come from native meters in `statistics().audioPeaksDb`; CPU comes from libobs process sampling. Global hotkey collection belongs to the application. Do not render fictional GPU counters.
 - `loadPlugin(absoluteDll)` validates ABI v1 and exposes actions via `pluginActions`. `invokePluginAction` dispatches them. Plugins run trusted in-process, and must be explicitly selected by the user. The example DLL action requests 90 seconds of delay.
 
 ## Runtime layout
@@ -38,3 +38,105 @@ All nine generated software/NVENC/RTMP recording/replay/relay artifacts passed f
 ## Explicit remaining limits
 
 No external Twitch/YouTube session, network-reconnect fault test, long-duration soak, visual desktop/window/game capture validation, perceptual lip-sync measurement or OBS performance comparison has been completed in this stage. Native preview implementation awaits GUI validation. Recording supports six assignable stereo AAC tracks. Replay uses track 1. Output resolution/FPS and CBR video quality remain shared. Actual Windows application audio isolation is unverified. MP4 remux, splitting, disk-pressure monitoring after start, audio meters, global hotkeys, disk delay spill, richer plugin extension types and plugin unload controls remain work. The existing replay buffer has time/size settings but is OBS's implementation, not the core queue's exact memory accounting. Core delay caps bound queue payload capacity and packet count, not total process RSS.
+
+
+## Workspace API (19 November 2026)
+
+All workspace calls belong on the Engine Qt thread. Names are globally unique public
+OBS source names (1–128 characters); scenes contain at most 64 public items and a
+collection contains at most 128 scenes. The Engine owns scene references. Scene
+items own sources; companion and audio-owner maps borrow pointers from those items.
+Meters detach before source destruction. Both displays are detached and the preview
+view/global scene/transition references released before draining OBS destruction.
+
+- `renameScene`, `duplicateScene`, `moveScene(name, position)` manage ordered scenes.
+  Duplication creates independent sources, filters and audio controls; copied source
+  names use `new scene / old source`, with a numeric suffix on collisions.
+  Already-global audio-only rows are omitted from the copy because the original
+  global input covers both scenes; a desktop with global companion copies only its
+  video capture. This avoids double capture/mixing. The original scene still owns
+  that global input; removing its owner removes the shared global audio.
+- `sources(scene)` returns authoritative rows with `name`, `type`, `properties`,
+  `parent` (empty for root), `order` (zero-based sibling order, bottom to top),
+  `visible`, `locked`, and `transform`. Build a tree using `parent`; reverse sibling
+  presentation for the OBS-style topmost-first list. Do not override these values
+  from an old UI visibility map. The array itself also preserves sibling order.
+- `addGroup` creates a real libobs group. `moveSource(scene,name,parent,position)`
+  moves and reorders items, preserving native group transforms and moving private
+  display-audio companions with their owners. Positions beyond the sibling count
+  append. Cyclic groups are rejected. Removing a group recursively removes children;
+  it rejects locked descendants or track changes during recording before mutation.
+- `renameSource` migrates audio owner, meter, global-audio and companion keys, and
+  child parent references. Filter IDs/settings stay with the source. The UI should
+  update its selected name and references after success.
+- A source or ancestor group lock rejects removal, rename, reparent/reorder,
+  transforms, capture-property and filter edits. Unlocking and visibility toggles
+  remain usable. Audio mixer controls remain live. Scene deletion is independent
+  of item locks.
+- `sourcePropertySchema(scene,name)` returns supported native Boolean, integer,
+  float, color and enumerated-list fields (`key`, `label`, `type`, numeric
+  `min/max/step`, or `options:[{label,value}]`). `sourceProperties` returns current
+  merged values. `setSourceProperties` accepts a patch only after checking the real
+  native schema and enumerated options. It updates the existing native source.
+  Capture-audio topology is chosen at creation; use the audio APIs for routing.
+  Desktop companions expose an additional enumerated `audio_window` target.
+- `sourceTransform` / `setSourceTransform` expose `x`, `y`, `rotation`, `scaleX`,
+  `scaleY`, `boundsType`, `boundsWidth`, `boundsHeight`, `alignment`,
+  `boundsAlignment`, `cropLeft`, `cropTop`, `cropRight`, `cropBottom`. Numeric ranges
+  are validated, nonfinite values and unknown keys rejected. Bounds/alignment use
+  the native OBS enums/bits. Changes are applied in a deferred native item update.
+- `videoFilterTypes`, `videoFilters`, `setVideoFilters` expose native Color
+  Correction, Chroma Key and Crop/Pad when registered. Chains have at most 16 rows
+  `{id,name,type,enabled,settings}`; type IDs are `color_filter`,
+  `chroma_key_filter`, `crop_filter`. The catalog supplies native fields/defaults.
+  Rows are in processing order, like microphone filters. New native instances are
+  staged before replacing the old chain. Unsupported types/settings reject the
+  change/import; video filters are saved under `properties.video_filters`.
+
+`setStudioMode(true)` makes `selectScene` edit preview without changing program.
+`programScene()` identifies the current take target; `takePreview()` uses the
+configured transition, or accepts `"cut"`/`"fade"` explicitly. `setTransition(type,
+ms)` accepts 50–20000 ms. A second fade is rejected while a fade is active; Cut can
+interrupt it. Disabling Studio cuts the selected preview to program. Outside Studio,
+selecting a scene takes it with the configured transition. `statistics().transitionActive`
+reports actual native transition state. The preview-only view is never registered
+as an audio/video output mix, so scene-scoped preview audio is not encoded.
+
+Use `attachPreview`/`resizePreview` and `attachProgram`/`resizeProgram` with separate
+native HWNDs; pass zero to detach before destroying either window. Normal preview
+renders program, Studio preview renders the edit scene, and the program display
+always renders output. `setPreviewEnabled` disables only preview drawing; the UI
+owns its disabled-preview overlay. Program and outputs continue.
+
+Audio properties also accept `scope` (`scene`, default, or `global`) and
+`mixer_hidden` (Boolean UI preference). Global routes the same audio source through
+a private audio-only scene on output channel 1; OBS deduplicates sources also present
+in program. It remains audible off-scene and independent of scene visibility (mute
+it to silence). Supported for microphone, desktop audio, application audio, test tone
+and a desktop source's private audio companion. Window/game video sources reject
+Global; add an Application Audio source for that use. Changing scope updates native
+activation. Removing the owner removes global routing. `mixer_hidden` does not mute.
+
+`statistics()` adds measured `cpuPercent`, `streamDurationMs`, `recordingDurationMs`,
+`replayDurationMs`, `programScene`, `studioMode`, and `transitionActive`. Durations
+begin on genuine OBS output start signals and are zero while stopped; reconnect
+signals do not reset them. Existing actual FPS, frame-time, byte and audio-meter
+fields remain available.
+
+### Persisted collection
+
+Version 1 remains backward compatible. Optional top-level `programScene` defaults to
+`selectedScene`. Settings add `studioMode`, `transition`, `transitionDurationMs`.
+The ordered `scenes` array contains `{name,sources}`. Source rows retain their existing
+`name/type/properties` and add `parent`, `order`, `visible`, `locked`, `transform`.
+Groups use `type:"group"`; all rows remain in the scene's flat source array with
+parent names describing hierarchy. Missing layout fields retain prior defaults.
+The array order is authoritative; `order` is a derived sibling index. Audio and filter
+state remains inside `properties` as described above.
+
+Saving uses QSaveFile. Import first validates names, groups, cycles, layout, filters
+and audio, then constructs a candidate while retaining the original graph and its
+meters/output references. A native construction failure destroys the candidate and
+restores the previous graph/settings/names. Only complete success replaces the
+collection. Outputs must be stopped before import/video settings changes. Stream
+keys remain outside this JSON.

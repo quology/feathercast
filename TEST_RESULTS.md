@@ -112,3 +112,58 @@ RTMPS tls_verify=1 is applied; no external RTMPS/Twitch/YouTube session was test
 The packaged-runtime media fixture was placed beside the delivered application for testing and is excluded from the release ZIP. The archive contains no development SDK or OBS frontend executable.
 
 A matched short idle CPU/RSS sample is published in [BENCHMARKS.md](docs/BENCHMARKS.md), with raw engine counters in a separate artifact. It is not a production/gaming benchmark or performance-superiority claim. No comparable gaming FPS/1% low/frame-time measurements exist. Disk checking is pre-start only, without a live full-disk guarantee. UI utilization counters remain unavailable. Public redistribution/license/corresponding-source audit remains incomplete. See [feature status](docs/FEATURE_STATUS.md).
+
+
+## Workspace backend verification, 19 November 2026
+
+Release build and CTest passed with `scripts/build.ps1 -SkipBootstrap
+-Configuration Release` (five CTest targets). The explicit GPU fixture
+`feathercast_workspace_engine_smoke OBS_RUNTIME OUTPUT_DIRECTORY` passed using
+OBS 33, 640×360/30 fps and synthetic color/tone sources. It is deliberately not
+registered with headless CTest.
+
+- Real native nested groups, source/scene renaming and ordering, descendant locks,
+  unlocked visibility, property-schema rejection, native transforms, independent
+  duplication (including matching transforms), and group-cycle rejection passed.
+- Native Color Correction/Crop filters were attached and their processing order
+  verified. Layout, locks, source properties, video filters and Global/hidden mixer
+  state survived an exact JSON roundtrip. Malformed parents and an intentionally
+  failed native candidate construction preserved the prior graph and program.
+- Studio preview selection retained the native program source. Fade completed and
+  Cut selected the expected output. Actual output PCM RMS established that a
+  preview-only tone stayed out of program, became audible after Take, remained
+  audible off-scene with Global scope, and did not double mix when present in both
+  program and Global. Duplicating/removing a scene containing a global tone did
+  not duplicate its output level. Scene scope restored normal off-program inactivity.
+- Two native HWND displays were created, attached, resized, preview-disabled,
+  reenabled and detached before window destruction. This establishes API/lifetime
+  behavior, not final desktop layout or a visual pixel comparison.
+- A synthetic MKV recording exercised output timers. CPU and status keys were
+  present. Shutdown completed with zero unexpected OBS error-level logs and no
+  remaining-source/double-destruction diagnostic. Deliberate Engine errors covered
+  locked edits, unsupported property, cyclic group, invalid import and failed
+  candidate construction; those are expected fixture assertions.
+
+Evidence: `work/workspace-build.log`, `work/workspace-engine-tests.log`, and
+`work/workspace-engine-tests/workspace.json` (ignored local artifacts).
+
+The existing source-audio smoke also passed (`work/workspace-source-audio.log`),
+including six-track routing/lifecycle and private capture-audio ownership checks.
+`validate_source_audio.py` passed on its `isolated.mkv` and `routing.mkv`: the
+isolated 440 Hz track rejected 880 Hz by about 149.8 dB; the manually routed tracks
+contained their expected 440/880 Hz frequencies. Reports are
+`work/workspace-source-audio/isolated-validation.json` and
+`routing-validation.json`. Full media decode/timestamp/end-skew validation also
+passed for the workspace recording and all six source-audio media artifacts
+(`work/workspace-engine-tests/media-validation.json` and
+`work/workspace-source-audio/media-validation.json`). Existing microphone-filter native/UI smoke passed in
+`work/workspace-microphone-filters.log`; its device ID is deliberately nonexistent
+and its injected samples are synthetic.
+
+This stage validates the backend only. Workspace UI wiring, interactive editing,
+visible program/preview rendering, real application capture and grouped companion
+capture under a running application still need frontend/device testing. Global
+scope intentionally excludes window/game video sources (use Application Audio).
+Source capture-audio topology remains a creation-time option. Video filter support
+is the advertised three native types, not every OBS filter. No virtual-camera
+implementation, long soak or performance improvement is claimed.
