@@ -1,5 +1,13 @@
 # Verified test results
 
+## Twitch integration and VELA branding — 19 November 2026
+
+- The Windows Release build produced `VELA.exe` with the VELA icon and product metadata. CTest passed 5/5. The main window passed all 12 integrated checks in each theme. The header and icon were inspected in the running app.
+- The production Twitch service passed local HTTP and WebSocket fixtures for device authorization, DPAPI storage, profile locking, startup validation, token rotation and concurrent 401 recovery, rate-limit handling, scoped authorization rejection, API requests, chat receive/dedup/send and disconnect cleanup. The production dock fixture verified live viewer/uptime display, floating and resizing, dirty edit preservation and bounded plain-text chat.
+- Staged Qt deployment included Qt Network, Qt WebSockets and Schannel. With SDK directories off PATH, a Qt probe received the expected unauthenticated HTTP 401 from Twitch token validation and a secure EventSub welcome. This verifies TLS connectivity and the WebSocket handshake.
+- In an isolated profile, VELA opened a scene and retained a recording folder saved by FeatherCast. The existing profile and DPAPI vault identifiers are retained. The DPAPI regression test uses synthetic credentials.
+- Authenticated device consent, channel edits on Twitch, receiving and sending real chat, server-directed reconnect handoff, and viewer/uptime reporting during a real stream require an authorized Twitch account. The test run sent no authorized request to Twitch.
+
 ## Microphone filters — 19 November 2026
 
 - Release build in `build/MicrophoneFilters` passed with Qt 6.8.3, MinGW 13.1 and the pinned OBS runtime. CTest passed 3/3. The main window passed all 12 integrated checks in both themes.

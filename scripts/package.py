@@ -19,10 +19,10 @@ def main():
     args = parser.parse_args()
     manifest = json.loads((ROOT / "work/deps/manifest.json").read_text())
     build = ROOT / "build" / args.configuration
-    executables = list(build.rglob("FeatherCast.exe"))
+    executables = list(build.rglob("VELA.exe"))
     if len(executables) != 1:
-        raise SystemExit("Build exactly one FeatherCast.exe before packaging.")
-    name = f"FeatherCast-{args.version}-win64"
+        raise SystemExit("Build exactly one VELA.exe before packaging.")
+    name = f"VELA-{args.version}-win64"
     stage = ROOT / "dist" / name
     if stage.exists():
         raise SystemExit(f"Refusing to merge with an existing stage: {stage}. Use a new version or remove that named stage explicitly.")
@@ -31,7 +31,7 @@ def main():
     # to the process working directory; the engine selects this directory.
     (stage / "bin/64bit").mkdir(parents=True)
     (stage / "bin/64bit/.keep").write_text("")
-    shutil.copy2(executables[0], stage / "FeatherCast.exe")
+    shutil.copy2(executables[0], stage / "VELA.exe")
     remuxers = list(build.rglob("feathercast_remux.exe"))
     if len(remuxers) != 1:
         raise SystemExit("Build the feathercast_remux helper before packaging.")
@@ -54,7 +54,16 @@ def main():
         shutil.copy2(plugins[0], stage / "plugins" / plugins[0].name)
     deploy = Path(manifest["qt_prefix"]) / "bin/windeployqt.exe"
     deploy_env = dict(os.environ, PATH=str(deploy.parent) + os.pathsep + manifest["compiler_bin"] + os.pathsep + os.environ.get("PATH", ""))
-    subprocess.run([str(deploy), "--release" if args.configuration == "Release" else "--debug", "--compiler-runtime", "--no-translations", "--no-opengl-sw", str(stage / "FeatherCast.exe")], check=True, env=deploy_env)
+    subprocess.run([str(deploy), "--release" if args.configuration == "Release" else "--debug", "--compiler-runtime", "--no-translations", "--no-opengl-sw", str(stage / "VELA.exe")], check=True, env=deploy_env)
+    cache = (build / "CMakeCache.txt").read_text(encoding="utf-8")
+    twitch_option = next((line.partition("=")[2] for line in cache.splitlines()
+                          if line.startswith("FEATHERCAST_TWITCH:BOOL=")), "")
+    twitch_enabled = twitch_option.upper() in {"1", "ON", "YES", "TRUE", "Y"}
+    if twitch_enabled:
+        debug_suffix = "d" if args.configuration == "Debug" else ""
+        for dependency in (f"Qt6Network{debug_suffix}.dll", f"Qt6WebSockets{debug_suffix}.dll", f"tls/qschannelbackend{debug_suffix}.dll"):
+            if not (stage / dependency).is_file():
+                raise SystemExit(f"Twitch runtime dependency missing from staged package: {dependency}")
     # windeployqt's toolchain detection is not guaranteed outside Qt Creator.
     for name_ in ("libgcc_s_seh-1.dll", "libstdc++-6.dll", "libwinpthread-1.dll"):
         shutil.copy2(Path(manifest["compiler_bin"]) / name_, stage / name_)
@@ -77,6 +86,11 @@ def main():
     if not source_licenses.is_dir():
         raise SystemExit("Qt license inventory missing: rerun scripts/bootstrap.py before packaging.")
     shutil.copytree(source_licenses, notices / "Qt-source-licenses", dirs_exist_ok=True)
+    if twitch_enabled:
+        websockets_licenses = ROOT / f'work/deps/qt-source-licenses/qtwebsockets-everywhere-src-{manifest["qt"]}/LICENSES'
+        if not websockets_licenses.is_dir():
+            raise SystemExit("Qt WebSockets license inventory missing: rerun scripts/bootstrap.py before packaging.")
+        shutil.copytree(websockets_licenses, notices / "Qt-WebSockets-source-licenses")
     shutil.copytree(Path(manifest["qt_prefix"]) / "sbom", notices / "Qt-SPDX")
     archive_path = ROOT / "outputs" / f"{name}.zip"
     archive_path.parent.mkdir(exist_ok=True)

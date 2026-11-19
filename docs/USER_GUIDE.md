@@ -1,8 +1,10 @@
-# FeatherCast user guide
+# VELA user guide
 
-FeatherCast opens with a safe color scene and starts no capture or outputs automatically. Add scenes and sources with the + buttons. Display, window, game and audio devices activate only when explicitly added. Open **Advanced Audio Properties** from Sources or the View menu to adjust source audio. The Audio meters dock displays actual libobs peak readings in dBFS; silence or an expired reading displays -100 dBFS. The automation audio condition uses the loudest current source peak.
+VELA opens a safe color scene on a fresh profile. Add scenes and sources with the + buttons. Display, window, game and audio devices activate only when explicitly added. Open **Advanced Audio Properties** from Sources or the View menu to adjust source audio. The Audio meters dock displays actual libobs peak readings in dBFS, with silence or an expired reading shown as -100 dBFS. The automation audio condition uses the loudest current source peak.
 
 Configure the base streaming endpoint and stream key in Settings. The key is protected separately with Windows DPAPI. Choose an absolute output folder. Start streaming, recording and replay independently. Save replay works while the buffer is active. Streaming status distinguishes connection from starting or reconnecting. Replay settings include 15, 30, 60, 120 and 300 second presets and a memory cap.
+
+Open **View → Twitch channel** and **View → Twitch chat** to connect your account, edit channel information, and use chat. Follow the [Twitch setup guide](TWITCH.md) to register a public application and authorize it from VELA.
 
 In **Add source**, choose Window or Game capture, select the target and enable **Capture audio from this application only**. For Display capture, also select an **Audio application**: a monitor has no single application audio stream. **Application audio** adds an audio-only source. Application capture includes the selected app's audio, potentially including multiple windows/tabs; it does not mute other configured sources. Disable or mute Desktop audio if it would capture the same sound twice. Audio availability depends on the Windows/OBS runtime and whether the application supports capture.
 

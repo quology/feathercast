@@ -3,6 +3,9 @@
 #include "feathercast/ui/advanced_audio_dialog.hpp"
 #include "feathercast/ui/microphone_filters_dialog.hpp"
 #include "feathercast/ui/theme.hpp"
+#ifdef FEATHERCAST_TWITCH
+#include "feathercast/ui/twitch_docks.hpp"
+#endif
 #include <QCommandLineParser>
 #include <QJsonDocument>
 #include <QSaveFile>
@@ -293,14 +296,17 @@ public:
   Window(QString path, bool isSmoke) : dir(std::move(path)), smoke(isSmoke) {
     QDir().mkpath(dir);
     config = dir + "/engine.json";
-    setWindowTitle("FeatherCast");
+    setWindowTitle(QGuiApplication::applicationDisplayName());
     resize(1280, 800);
     auto *header = addToolBar("Workspace");
     header->setObjectName("WorkspaceHeader");
     header->setMovable(false);
     header->setFloatable(false);
-    header->addWidget(label("FeatherCast", "heading"));
-    header->addWidget(label("Broadcast workspace", "muted"));
+    auto *brandIcon = new QLabel;
+    brandIcon->setPixmap(QApplication::windowIcon().pixmap(24));
+    header->addWidget(brandIcon);
+    header->addWidget(label(QGuiApplication::applicationDisplayName(), "heading"));
+    header->addWidget(label("Video Encoding and Livestreaming Application", "muted"));
     auto *headerSpace = new QWidget;
     headerSpace->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     header->addWidget(headerSpace);
@@ -327,7 +333,7 @@ public:
     connect(&engine, &Engine::errorOccurred, this, [this](const QString &m) {
       statusBar()->showMessage(m, 12000);
       if (!smoke)
-        QMessageBox::warning(this, "FeatherCast", m);
+        QMessageBox::warning(this, QGuiApplication::applicationDisplayName(), m);
     });
     connect(&engine, &Engine::replaySaved, this, [this](const QString &p) {
       statusBar()->showMessage("Replay saved: " + p, 10000);
@@ -508,6 +514,9 @@ public:
     resizeDocks({findChildren<QDockWidget *>().first()}, {225}, Qt::Horizontal);
     resizeDocks({statsDock}, {190}, Qt::Vertical);
     statusBar()->showMessage("Ready · Your workspace is saved automatically", 6000);
+#ifdef FEATHERCAST_TWITCH
+    feathercast::ui::installTwitchDocks(this, dir);
+#endif
     auto view = menuBar()->addMenu("View");
     for (auto d : findChildren<QDockWidget *>())
       view->addAction(d->toggleViewAction());
@@ -782,9 +791,14 @@ void Window::settingsDialog() {
 }
 int main(int argc, char **argv) {
   QApplication app(argc, argv);
+  // These identifiers are the existing on-disk profile and DPAPI vault paths.
   QCoreApplication::setOrganizationName("FeatherCast");
   QCoreApplication::setApplicationName("FeatherCast");
+  app.setApplicationDisplayName("VELA");
+  app.setApplicationVersion(VELA_VERSION);
+  app.setWindowIcon(QIcon(":/vela/vela.ico"));
   QCommandLineParser parser;
+  parser.setApplicationDescription("VELA - Video Encoding and Livestreaming Application");
   parser.addHelpOption();
   QCommandLineOption smoke("smoke-ui", "Run UI smoke mode");
   QCommandLineOption quit("quit-after", "Quit after seconds", "seconds");
