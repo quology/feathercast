@@ -32,7 +32,7 @@ if(FEATHERCAST_BUILD_ENGINE OR FEATHERCAST_BUILD_APP)
         find_library(FC_${lib}_LIBRARY NAMES ${lib} PATHS "${FEATHERCAST_OBS_SDK}/lib" REQUIRED NO_DEFAULT_PATH)
     endforeach()
     add_library(feathercast_engine STATIC
-        src/engine/engine.cpp src/engine/relay_output.cpp
+        src/engine/engine.cpp src/engine/relay_output.cpp src/engine/microphone_filters.cpp
         include/feathercast/engine/engine.hpp)
     set_target_properties(feathercast_engine PROPERTIES AUTOMOC ON)
     target_compile_features(feathercast_engine PUBLIC cxx_std_20)
@@ -86,6 +86,11 @@ if(FEATHERCAST_BUILD_ENGINE OR FEATHERCAST_BUILD_APP)
                 src/ui/advanced_audio_dialog.cpp src/ui/theme.cpp)
             target_link_libraries(feathercast_advanced_audio_ui_smoke PRIVATE feathercast_engine Qt6::Widgets)
             feathercast_runtime(feathercast_advanced_audio_ui_smoke)
+            add_executable(feathercast_microphone_filters_smoke tests/microphone_filters_smoke.cpp
+                src/ui/microphone_filters_dialog.cpp src/ui/theme.cpp)
+            target_link_libraries(feathercast_microphone_filters_smoke PRIVATE feathercast_engine Qt6::Widgets "${FC_obs_LIBRARY}")
+            target_include_directories(feathercast_microphone_filters_smoke SYSTEM PRIVATE "${FEATHERCAST_OBS_SOURCE}/libobs" "${FEATHERCAST_OBS_SDK}/include")
+            feathercast_runtime(feathercast_microphone_filters_smoke)
             add_executable(feathercast_automation_config_tests tests/automation_config_tests.cpp src/ui/automation_config.cpp)
             target_link_libraries(feathercast_automation_config_tests PRIVATE feathercast_core Qt6::Widgets)
             add_test(NAME feathercast_automation_config_tests COMMAND feathercast_automation_config_tests)

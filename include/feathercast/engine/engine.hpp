@@ -45,6 +45,13 @@ public:
     QJsonArray audioSources() const;
     QJsonObject audioProperties(const QString& name) const;
     bool setAudioProperties(const QString& name, const QJsonObject& patch);
+    // Opt-in microphone-only filters, in audible processing order. Each row has
+    // id (stable unique token), name, type, enabled and settings. Catalog includes
+    // runtime availability, supported suppression methods, defaults and ranges.
+    QJsonArray microphoneFilterTypes() const;
+    bool isMicrophone(const QString& name) const;
+    QJsonArray microphoneFilters(const QString& name) const;
+    bool setMicrophoneFilters(const QString& name, QJsonArray filters);
     bool audioMonitoringAvailable() const;
     bool recordingActive() const;
     void setSourceAudio(const QString& name, double volume, bool muted);

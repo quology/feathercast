@@ -8,6 +8,7 @@ Implemented features and environment-specific verification are distinct.
 | UI/capture | Dockable scenes/sources, real options, safe Color startup | Actual desktop/window/game visual capture and protected games unverified |
 | Preview | Native HWND display and gate | QWidget screenshots exclude HWND; visibility unverified |
 | Audio | Advanced Audio Properties, live peaks, application-only capture and six assignable MKV mixers | Streaming/replay use track 1. App capture is process-level. Actual Windows application isolation and acoustic monitoring remain unverified. |
+| Microphone filters | Native libobs compressor, gate and Speex/RNNoise suppression; live themed controls, bypass, ordering and persistence | Optional module/method availability is detected; unavailable saved rows remain dormant. No real microphone listening or noise-quality comparison claimed. |
 | Outputs | Shared H.264/AAC pair; x264 and RTX 4070 NVENC simultaneous streaming/record/replay tested | Independent resolution/quality profiles absent; AMF/QSV unverified |
 | Delay | 0–300 s target; default 256 MiB payload-capacity and 100,000 packet caps; live changes tested | No disk spill; cuts lose content, holds can time out; cap is not total RSS |
 | Replay | Time/memory settings and 15/30/60/120/300 s presets | Uses OBS replay implementation, distinct from delay accounting |

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added opt-in microphone filters using native libobs Compressor, Noise Gate and Noise Suppression. The themed Filters dialog includes bypass, add/remove, processing order, defaults, Speex level and runtime-supported RNNoise. Filter settings and order persist; unavailable optional filters remain saved and visibly dormant.
 - Added Advanced Audio Properties for sources across all scenes, with live status, dB/percent gain, mute, mono, stereo balance, signed sync offset, monitoring and six independent track assignments. Stream and replay use track 1. Existing isolated-track and UI gain settings migrate into the scene configuration.
 - Added optional application audio to display/window/game capture, an Application audio source, and separate source recording tracks alongside the normal mix (up to five isolated tracks). Source controls, meters, scene lifecycle and saved configuration include capture audio; streaming/replay keep the mixed track.
 - Refreshed the Qt workspace with neutral light/dark themes, monochrome primary actions, preview framing and compact tabbed monitoring docks.
