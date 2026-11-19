@@ -1,6 +1,7 @@
 #include "feathercast/engine/engine.hpp"
 #include "feathercast/core/plugin_api.h"
 #include "relay_output.hpp"
+#include "microphone_filters.hpp"
 #include <obs.h>
 #include <obs-audio-controls.h>
 #include <QSet>
@@ -523,7 +524,8 @@ bool Engine::loadConfiguration(const QString& path, const QJsonObject& legacySou
             if (!sourceValue.isObject() || sourceName.trimmed().isEmpty() || sourceName.size() > 128 || sourceNames.contains(sourceName) || !sourceId(source["type"].toString()) || !source["properties"].isObject() || sceneNames.contains(sourceName)) return d->fail("Invalid saved source");
             sourceNames.insert(sourceName);
             const auto type = source["type"].toString();
-            const auto properties = source["properties"].toObject();
+            auto properties = source["properties"].toObject();
+            if (const auto filterError = filters::normalizeSource(type, properties); !filterError.isEmpty()) return d->fail(filterError);
             const auto audioError = audioSettingsError(type, properties);
             if (!audioError.isEmpty()) return d->fail(audioError);
             if (d->ready && (properties.value("capture_audio").toBool() || type == "application_audio") && !sourceAudioAvailable(type))
@@ -603,6 +605,7 @@ bool Engine::addSource(const QString& scene, const QString& type, const QString&
     if (found == d->scenes.end() || !id || name.trimmed().isEmpty() || name.size() > 128 || found->sources.size() >= 64) return d->fail("Invalid source or scene");
     if (auto* existing = obs_get_source_by_name(name.toUtf8().constData())) { obs_source_release(existing); return d->fail("Source names must be unique"); }
     if (type == "game" && !properties.value("window").toString().isEmpty() && !properties.contains("capture_mode")) properties["capture_mode"] = "window";
+    if (const auto error = filters::normalizeSource(type, properties); !error.isEmpty()) return d->fail(error);
     const auto audioError = audioSettingsError(type, properties);
     if (!audioError.isEmpty()) return d->fail(audioError);
     if ((properties.value("capture_audio").toBool() || type == "application_audio") && !sourceAudioAvailable(type))
@@ -617,10 +620,13 @@ bool Engine::addSource(const QString& scene, const QString& type, const QString&
     if (type == "desktop" && !properties.contains("monitor")) properties["monitor"] = 0;
     if (type == "game" && !properties.contains("capture_mode")) properties["capture_mode"] = "any";
     if ((type == "microphone" || type == "desktop_audio") && !properties.contains("device_id")) properties["device_id"] = "default";
-    auto captureProperties = properties; captureProperties.remove("audio");
+    auto captureProperties = properties; captureProperties.remove("audio"); captureProperties.remove("filters");
     auto* settings = obsSettings(captureProperties);
     auto* source = obs_source_create(id, name.toUtf8().constData(), settings, nullptr); obs_data_release(settings);
     if (!source) return d->fail("Capture/source module could not create " + name);
+    if (const auto error = filters::apply(source, {}, properties.value("filters").toArray()); !error.isEmpty()) {
+        obs_source_release(source); return d->fail(error);
+    }
     const bool useCompanion = type == "desktop" && properties.value("capture_audio").toBool();
     if (!audio.isEmpty() && !useCompanion) applyAudio(source, audio);
     else if (obs_source_get_output_flags(source) & OBS_SOURCE_AUDIO) obs_source_set_audio_mixers(source, 0);
@@ -740,6 +746,54 @@ bool Engine::setAudioProperties(const QString& name, const QJsonObject& patch) {
             return d->fail("Audio monitoring requires a Windows playback device");
         applyAudio(source, audio, before);
         properties["audio"] = audio; entry["properties"] = properties; scene.sources[i] = entry;
+        return true;
+    }
+    return false;
+}
+QJsonArray Engine::microphoneFilterTypes() const {
+    Q_ASSERT(QThread::currentThread() == thread());
+    return filters::catalog(d->ready);
+}
+bool Engine::isMicrophone(const QString& name) const {
+    Q_ASSERT(QThread::currentThread() == thread());
+    for (const auto& scene : d->scenes) for (auto value : scene.sources) {
+        const auto entry = value.toObject();
+        if (entry["name"] == name) return entry["type"] == "microphone" && d->audioOwners.contains(name);
+    }
+    return false;
+}
+QJsonArray Engine::microphoneFilters(const QString& name) const {
+    Q_ASSERT(QThread::currentThread() == thread());
+    for (const auto& scene : d->scenes) for (auto value : scene.sources) {
+        const auto entry = value.toObject();
+        if (entry["name"] == name && entry["type"] == "microphone") return entry["properties"].toObject()["filters"].toArray();
+    }
+    return {};
+}
+bool Engine::setMicrophoneFilters(const QString& name, QJsonArray chain) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (!d->ready || !isMicrophone(name)) return d->fail("Filters require an existing microphone source");
+    if (const auto error = filters::normalize(chain, false); !error.isEmpty()) return d->fail(error);
+    const auto existing = microphoneFilters(name);
+    for (auto value : chain) {
+        const auto row = value.toObject(); QJsonArray single{row};
+        if (const auto error = filters::normalize(single, true); !error.isEmpty()) {
+            bool retained = false;
+            for (auto oldValue : existing) {
+                const auto old = oldValue.toObject();
+                if (old["id"] == row["id"] && old["type"] == row["type"] && old["settings"] == row["settings"]) retained = true;
+            }
+            if (!retained) return d->fail(error);
+        }
+    }
+    auto* source = d->audioOwners.value(name);
+    for (auto& scene : d->scenes) for (qsizetype i = 0; i < scene.sources.size(); ++i) {
+        auto entry = scene.sources[i].toObject();
+        if (entry["name"] != name) continue;
+        auto properties = entry["properties"].toObject(); const auto before = properties["filters"].toArray();
+        if (before == chain) return true;
+        if (const auto error = filters::apply(source, before, chain); !error.isEmpty()) return d->fail(error);
+        properties["filters"] = chain; entry["properties"] = properties; scene.sources[i] = entry;
         return true;
     }
     return false;

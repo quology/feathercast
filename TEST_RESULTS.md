@@ -1,5 +1,14 @@
 # Verified test results
 
+## Microphone filters — 19 November 2026
+
+- Release build in `build/MicrophoneFilters` passed with Qt 6.8.3, MinGW 13.1 and the pinned OBS runtime. CTest passed 3/3. The main window passed all 12 integrated checks in both themes.
+- The production microphone dialog fixture passed add, remove, bypass, reorder, Defaults, and synchronized Speex slider and numeric entry checks. It also checked the window after microphone removal. Dark and light dialog captures were reviewed.
+- Native tests verified real libobs filter registration, order, retained filter identity, and persisted settings and bypass. Invalid edits/imports preserved the original graph. Legacy microphone and video sources loaded without adding filters.
+- Injected synthetic samples verified compressor attenuation and measured a change in gate output when swapping filter order. Bypass restored the input as expected. Suppression checks covered finite processed samples for Speex and exercised RNNoise when advertised by the runtime.
+- The fixture passed with a runtime missing `obs-filters`. The saved chain loaded without native filters attached. Dormant settings survived changes and reload, and Add was disabled in the dialog.
+- Existing source audio and Advanced Audio Properties smoke tests passed. The decoded track routing check still found 440 Hz on track 1, 880 Hz on track 2 and both on shared track 3. Acoustic quality on a physical microphone was not evaluated. The fixture used an intentionally nonexistent device and synthetic samples.
+
 ## Full Advanced Audio Properties — 19 November 2026
 
 - Full Release build in `build/AdvancedAudio` passed; CTest 3/3 passed. Existing application instances were left running in their original directories.

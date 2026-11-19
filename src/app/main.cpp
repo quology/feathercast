@@ -1,6 +1,7 @@
 #include "feathercast/engine/engine.hpp"
 #include "feathercast/ui/automation_panel.hpp"
 #include "feathercast/ui/advanced_audio_dialog.hpp"
+#include "feathercast/ui/microphone_filters_dialog.hpp"
 #include "feathercast/ui/theme.hpp"
 #include <QCommandLineParser>
 #include <QJsonDocument>
@@ -194,6 +195,13 @@ class Window : public QMainWindow {
       if (engine.addSource(engine.currentScene(), kind, name.text(), p)) d.accept();
     });
     d.exec();
+  }
+  void filtersDialog() {
+    auto* item = sources->currentItem();
+    if (!item || item->data(Qt::UserRole).toString() != "microphone") return;
+    std::unique_ptr<QDialog> dialog(feathercast::ui::createMicrophoneFiltersDialog(engine, item->text(), this));
+    dialog->exec();
+    saveConfig();
   }
   void audioDialog() {
     std::unique_ptr<QDialog> dialog(feathercast::ui::createAdvancedAudioDialog(engine, this));
@@ -391,6 +399,20 @@ public:
       if (sources->currentItem())
         engine.removeSource(engine.currentScene(),
                             sources->currentItem()->text());
+    });
+    auto* filters = button("Filters...", sol, [this] { filtersDialog(); });
+    filters->setToolTip("Add compressor, noise gate and noise suppression to the selected microphone");
+    filters->setEnabled(false);
+    connect(sources, &QListWidget::currentItemChanged, this, [filters](QListWidgetItem* item) {
+      filters->setEnabled(item && item->data(Qt::UserRole).toString() == "microphone");
+    });
+    sources->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(sources, &QListWidget::customContextMenuRequested, this, [this](const QPoint& pos) {
+      auto* item = sources->itemAt(pos);
+      if (!item || item->data(Qt::UserRole).toString() != "microphone") return;
+      sources->setCurrentItem(item);
+      QMenu menu(this); menu.addAction("Filters...", this, [this] { filtersDialog(); });
+      menu.exec(sources->viewport()->mapToGlobal(pos));
     });
     auto *sourceAudio = button("Advanced Audio Properties…", sol, [this] { audioDialog(); });
     sourceAudio->setToolTip("Adjust audio and track assignments for sources across all scenes");
