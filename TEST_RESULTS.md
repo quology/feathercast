@@ -1,5 +1,15 @@
 # Verified test results
 
+## Application audio and isolated recording tracks — 19 November 2026
+
+- Full Release build in `build/SourceAudio` passed with pinned Qt 6.8.3/MinGW 13.1; the existing `build/Release` executable was in use and was not replaced. Existing `obs_add_data_path` deprecation warning remains.
+- CTest 3/3 passed. Integrated UI self-test passed all 12 Boolean checks in each theme; both timed launches exited 0. Add source was visually inspected with the new capture-audio and separate-recording-track controls.
+- `feathercast_source_audio_smoke` passed: explicit target validation; private display-audio companion ownership, mute/gain/visibility/removal and namesake handling; native window/game routing; normal source defaults; configuration roundtrips and invalid-import preservation; five-track capacity; recording topology guards; concurrent recording/stream/replay; recording restart; physical track-number gaps; clean shutdown with no OBS error-level logs.
+- Five generated media files passed every-track FFmpeg decode, strictly increasing per-stream DTS, initial video keyframe and all-track A/V end-skew checks: initial recording, restarted recording, gap recording, local FLV relay and replay.
+- `scripts/validate_source_audio.py` independently decoded the initial MKV: mix track contains 440/880 Hz at comparable levels, isolated track contains 440 Hz with 880 Hz approximately 149 dB lower in this synthetic fixture (required suppression: 40 dB). Track labels and silent physical gap track were checked with FFprobe.
+- Initial native validation caught synthesized null JSON option keys breaking reload; optional reads now preserve absent keys, and the final fixture includes this regression check.
+- Actual sound capture/isolation from a real Windows application remains unverified. Native capture ownership tests use nonexistent windows in an inactive scene, then remove them before recording; media tests use explicit synthetic tones. No user's application audio or live external platform was recorded.
+
 ## UI refresh — 19 November 2026
 
 - Full Release build with pinned Qt 6.8.3 and MinGW 13.1: passed.

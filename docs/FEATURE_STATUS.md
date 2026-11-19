@@ -1,4 +1,4 @@
-# Feature status — 18 November 2026
+# Feature status — 19 November 2026
 
 Implemented features and environment-specific verification are distinct.
 
@@ -7,7 +7,7 @@ Implemented features and environment-specific verification are distinct.
 | Engine | Native C++20, Qt 6.8.3/MinGW 13.1, OBS 33 C ABI, D3D11 | Windows 11 x64; selected non-frontend OBS modules only |
 | UI/capture | Dockable scenes/sources, real options, safe Color startup | Actual desktop/window/game visual capture and protected games unverified |
 | Preview | Native HWND display and gate | QWidget screenshots exclude HWND; visibility unverified |
-| Audio | Volume/mute, actual obs_volmeter peaks, verified test tone | One stereo AAC track; multitrack absent |
+| Audio | Volume/mute, actual obs_volmeter peaks, application-only capture; mixed audio plus up to five isolated source tracks in MKV | Streaming/replay keep one mix; app capture is process-level, not tab-level; actual Windows application isolation unverified |
 | Outputs | Shared H.264/AAC pair; x264 and RTX 4070 NVENC simultaneous streaming/record/replay tested | Independent resolution/quality profiles absent; AMF/QSV unverified |
 | Delay | 0–300 s target; default 256 MiB payload-capacity and 100,000 packet caps; live changes tested | No disk spill; cuts lose content, holds can time out; cap is not total RSS |
 | Replay | Time/memory settings and 15/30/60/120/300 s presets | Uses OBS replay implementation, distinct from delay accounting |

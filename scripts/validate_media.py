@@ -26,12 +26,13 @@ def inspect(media, probe, decoder):
             raise ValueError(f"Non-increasing DTS in stream {index}")
         if stream["codec_type"] == "video" and "K" not in packets[0]["flags"]:
             raise ValueError("Video does not begin with a keyframe")
-        ends[stream["codec_type"]] = float(packets[-1]["pts_time"]) + float(packets[-1].get("duration_time", 0))
+        ends[index] = float(packets[-1]["pts_time"]) + float(packets[-1].get("duration_time", 0))
         summaries.append({**stream, "packet_count": len(packets), "first_dts_seconds": dts[0], "last_dts_seconds": dts[-1], "strictly_increasing_dts": True})
-    skew = abs(ends["video"] - ends["audio"])
+    skew = max(abs(ends[v] - ends[a]) for v, video in streams.items() if video["codec_type"] == "video"
+               for a, audio in streams.items() if audio["codec_type"] == "audio")
     if skew > 0.25:
         raise ValueError(f"Audio/video end skew exceeds 250 ms: {skew}")
-    result = subprocess.run([str(decoder), "-nostdin", "-v", "error", "-xerror", "-i", str(media), "-f", "null", "-"], capture_output=True, text=True)
+    result = subprocess.run([str(decoder), "-nostdin", "-v", "error", "-xerror", "-i", str(media), "-map", "0:v", "-map", "0:a", "-f", "null", "-"], capture_output=True, text=True)
     if result.returncode:
         raise ValueError("Full decode failed: " + result.stderr[:2000])
     return {"file": media.name, "bytes": media.stat().st_size, "format": data.get("format"), "streams": summaries, "audio_video_end_skew_seconds": skew, "full_decode": "passed", "result": "passed"}

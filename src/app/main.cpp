@@ -191,40 +191,96 @@ class Window : public QMainWindow {
     QDialog d(this);
     d.setWindowTitle("Add source");
     QFormLayout form(&d);
-    QComboBox type, option;
+    d.setMinimumWidth(520);
+    QComboBox type, option, audioApplication;
     QLineEdit name;
+    QCheckBox captureAudio("Capture audio from this application only");
+    QCheckBox separateTrack("Also save a separate recording track");
+    QLabel audioNote;
+    audioNote.setWordWrap(true);
+    QDialogButtonBox buttons(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
     const QList<QPair<QString, QString>> types = {
         {"Display capture", "desktop"},     {"Window capture", "window"},
         {"Game capture", "game"},           {"Microphone", "microphone"},
-        {"Desktop audio", "desktop_audio"}, {"Color", "color"},
+        {"Desktop audio", "desktop_audio"}, {"Application audio", "application_audio"}, {"Color", "color"},
         {"Test tone", "test_tone"}};
     for (auto t : types)
       type.addItem(t.first, t.second);
     form.addRow("Type", &type);
     form.addRow("Name", &name);
     form.addRow("Device / target", &option);
+    form.addRow(&captureAudio);
+    form.addRow("Audio application", &audioApplication);
+    form.addRow(&separateTrack);
+    form.addRow(&audioNote);
+    form.addRow(&buttons);
+    auto updateAudio = [&] {
+      const auto kind = type.currentData().toString();
+      const bool visual = kind == "desktop" || kind == "window" || kind == "game";
+      const bool available = engine.sourceAudioAvailable(kind);
+      captureAudio.setVisible(visual);
+      captureAudio.setEnabled(available);
+      const bool audioEnabled = available && (!visual || captureAudio.isChecked());
+      form.setRowVisible(&audioApplication, kind == "desktop" && audioEnabled);
+      separateTrack.setVisible(visual || available);
+      separateTrack.setEnabled(audioEnabled);
+      if (!audioEnabled) separateTrack.setChecked(false);
+      if (visual && !available)
+        audioNote.setText("Application audio capture is unavailable in this Windows / capture runtime.");
+      else if (audioEnabled)
+        audioNote.setText(kind == "desktop"
+          ? "A display has no single audio source. Choose an application: its audio joins the normal mix. A separate recording track contains only this application's audio. Mute Desktop audio to avoid duplicates."
+          : "Audio joins the normal mix. A separate recording track contains only this source (up to five sources). Application capture includes the app, not an individual tab. Mute Desktop audio to avoid duplicates.");
+      else
+        audioNote.setText(visual ? "Enable audio to include the selected application's sound." : "");
+      bool valid = !name.text().trimmed().isEmpty();
+      if (kind == "application_audio" || (audioEnabled && (kind == "window" || kind == "game")))
+        valid = valid && !option.currentData().toMap().value("value").toString().isEmpty();
+      if (kind == "desktop" && audioEnabled)
+        valid = valid && !audioApplication.currentData().toMap().value("value").toString().isEmpty();
+      if (kind == "application_audio") valid = valid && available;
+      buttons.button(QDialogButtonBox::Ok)->setEnabled(valid);
+    };
     auto update = [&] {
       option.clear();
       for (auto v : engine.sourceOptions(type.currentData().toString())) {
         auto o = v.toObject();
         option.addItem(o["name"].toString(), o.toVariantMap());
       }
+      audioApplication.clear();
+      if (type.currentData().toString() == "desktop") {
+        audioApplication.addItem("Select an application…");
+        for (auto v : engine.sourceOptions("application_audio")) {
+          auto o = v.toObject();
+          if (!o["value"].toString().isEmpty()) audioApplication.addItem(o["name"].toString(), o.toVariantMap());
+        }
+      }
+      captureAudio.setChecked(false);
+      separateTrack.setChecked(false);
       name.setText(type.currentText());
+      updateAudio();
     };
     connect(&type, &QComboBox::currentIndexChanged, &d, update);
+    connect(&option, &QComboBox::currentIndexChanged, &d, updateAudio);
+    connect(&audioApplication, &QComboBox::currentIndexChanged, &d, updateAudio);
+    connect(&captureAudio, &QCheckBox::toggled, &d, updateAudio);
+    connect(&name, &QLineEdit::textChanged, &d, updateAudio);
     update();
-    QDialogButtonBox buttons(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
-    form.addRow(&buttons);
-    connect(&buttons, &QDialogButtonBox::accepted, &d, &QDialog::accept);
     connect(&buttons, &QDialogButtonBox::rejected, &d, &QDialog::reject);
-    if (d.exec() == QDialog::Accepted) {
+    connect(&buttons, &QDialogButtonBox::accepted, &d, [&] {
       QJsonObject p;
       auto o = option.currentData().toMap();
       if (!o.isEmpty())
         p[o["property"].toString()] = QJsonValue::fromVariant(o["value"]);
-      engine.addSource(engine.currentScene(), type.currentData().toString(),
-                       name.text(), p);
-    }
+      const auto kind = type.currentData().toString();
+      if ((kind == "desktop" || kind == "window" || kind == "game") && captureAudio.isChecked() && captureAudio.isEnabled()) {
+        p["capture_audio"] = true;
+        if (kind == "desktop") p["audio_window"] = QJsonValue::fromVariant(audioApplication.currentData().toMap()["value"]);
+      }
+      if (separateTrack.isChecked() && separateTrack.isEnabled()) p["separate_audio_track"] = true;
+      if (engine.addSource(engine.currentScene(), kind, name.text(), p)) d.accept();
+    });
+    d.exec();
   }
   void audioDialog() {
     auto item = sources->currentItem();

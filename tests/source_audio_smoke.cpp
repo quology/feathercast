@@ -1,0 +1,163 @@
+#include "feathercast/engine/engine.hpp"
+#include <obs.h>
+#include <util/base.h>
+#include <QCoreApplication>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QJsonDocument>
+#include <QTimer>
+#include <atomic>
+#include <cmath>
+#include <cstdio>
+#include <iostream>
+
+using feathercast::engine::Engine;
+int main(int argc, char** argv) {
+    QCoreApplication app(argc, argv);
+    if (app.arguments().size() != 3) { std::cerr << "usage: source_audio_smoke OBS_RUNTIME OUTPUT_DIRECTORY\n"; return 2; }
+    const auto output = QFileInfo(app.arguments()[2]).absoluteFilePath(); QDir().mkpath(output);
+    std::atomic<int> logErrors{0};
+    base_set_log_handler([](int level, const char* format, va_list arguments, void* context) {
+        if (level <= LOG_ERROR) ++*static_cast<std::atomic<int>*>(context);
+        std::vfprintf(stderr, format, arguments); std::fputc('\n', stderr);
+    }, &logErrors);
+    Engine engine;
+    bool failed = false, expectError = false, replaySaved = false;
+    auto check = [&](bool ok, const char* message) { if (!ok) { failed = true; std::cerr << "FAILED " << message << '\n'; } };
+    QObject::connect(&engine, &Engine::errorOccurred, &app, [&](const QString& text) {
+        if (!expectError) { failed = true; std::cerr << "ERROR " << text.toStdString() << '\n'; }
+    });
+    QObject::connect(&engine, &Engine::replaySaved, &app, [&](const QString& path) { replaySaved = QFileInfo(path).size() > 0; });
+    auto settings = Engine::defaultSettings();
+    settings["width"] = 640; settings["height"] = 360; settings["fps"] = 30;
+    settings["encoder"] = "obs_x264"; settings["videoBitrateKbps"] = 1000;
+    settings["keyframeSeconds"] = 1; settings["outputDirectory"] = output;
+    if (!engine.initialize(app.arguments()[1], settings) || !engine.addScene("Mix")) return 1;
+    check(engine.addSource("Mix", "color", "Pattern"), "pattern");
+    expectError = true;
+    check(!engine.addSource("Mix", "desktop", "Invalid display", {{"capture_audio", true}}), "display requires explicit application");
+    check(!engine.addSource("Mix", "application_audio", "Invalid application", {{"window", "invalid"}}), "invalid application target rejected");
+    check(!engine.addSource("Mix", "color", "Invalid track", {{"separate_audio_track", true}}), "video-only track rejected");
+    expectError = false;
+
+    // Never capture a real user's application. These nonexistent targets are
+    // created only in an inactive scene, and removed before recording starts.
+    const QString target = "FeatherCast nonexistent fixture:FeatherCastAudioFixture:feathercast-audio-fixture.exe";
+    if (engine.sourceAudioAvailable("desktop")) {
+        check(engine.addScene("Capture ownership"), "capture scene");
+        check(engine.addSource("Capture ownership", "desktop", "Display", {{"capture_audio", true}, {"audio_window", target}, {"separate_audio_track", true}}), "display companion");
+        auto* sceneSource = obs_get_source_by_name("Capture ownership");
+        auto* scene = obs_scene_from_source(sceneSource);
+        struct Items { obs_sceneitem_t* audio{}; int count{}; } items;
+        obs_scene_enum_items(scene, [](obs_scene_t*, obs_sceneitem_t* item, void* data) {
+            auto& items = *static_cast<Items*>(data); ++items.count;
+            if (QString::fromUtf8(obs_source_get_id(obs_sceneitem_get_source(item))) == "wasapi_process_output_capture") items.audio = item;
+            return true;
+        }, &items);
+        check(items.count == 2 && items.audio, "one private companion scene item");
+        if (items.audio) {
+            auto* source = obs_sceneitem_get_source(items.audio);
+            check(obs_source_get_audio_mixers(source) == 3, "companion mix and isolated routing");
+            engine.setSourceAudio("Display", .25, true);
+            check(obs_source_muted(source) && std::abs(obs_source_get_volume(source) - .25f) < .001, "companion mute and gain");
+            engine.setSourceVisible("Capture ownership", "Display", false);
+            check(!obs_sceneitem_visible(items.audio), "companion hidden with video");
+            engine.setSourceVisible("Capture ownership", "Display", true);
+            check(obs_sceneitem_visible(items.audio), "companion shown with video");
+        }
+        obs_source_release(sceneSource);
+        // A public source may legitimately share the private companion's name.
+        check(engine.addSource("Capture ownership", "test_tone", "Display audio"), "public name matching private companion");
+        engine.setSourceVisible("Capture ownership", "Display audio", false);
+        if (items.audio) check(obs_sceneitem_visible(items.audio), "public visibility does not target private namesake");
+        check(engine.removeSource("Capture ownership", "Display audio"), "remove public namesake only");
+        engine.setSourceAudio("Display", .5, false);
+        if (items.audio) check(!obs_source_muted(obs_sceneitem_get_source(items.audio)), "private companion survives namesake removal");
+        check(engine.sources("Capture ownership").size() == 1, "companion hidden from source configuration");
+        check(engine.statistics()["audioPeaksDb"].toObject().contains("Display"), "companion meter owned by video name");
+        check(engine.saveConfiguration(output + "/capture-config.json") && engine.loadConfiguration(output + "/capture-config.json"), "capture config roundtrip");
+        check(engine.sources("Capture ownership")[0].toObject()["properties"].toObject()["audio_window"].toString() == target, "application choice persisted");
+        check(engine.removeSource("Capture ownership", "Display"), "remove display and companion");
+        check(!engine.statistics()["audioPeaksDb"].toObject().contains("Display"), "remove companion meter");
+        for (const auto& type : {"window", "game"}) if (engine.sourceAudioAvailable(type)) {
+            const auto name = QString("Native %1").arg(type);
+            check(engine.addSource("Capture ownership", type, name, {{"capture_audio", true}, {"window", target}, {"separate_audio_track", true}}), "native capture audio");
+            auto* source = obs_get_source_by_name(name.toUtf8().constData());
+            if (source) {
+                auto* properties = obs_source_get_settings(source);
+                check(obs_data_get_bool(properties, "capture_audio") && obs_source_get_audio_mixers(source) == 3, "native capture audio and parent mixer");
+                if (QString(type) == "game") check(QString::fromUtf8(obs_data_get_string(properties, "capture_mode")) == "window", "selected game target respected");
+                obs_data_release(properties); obs_source_release(source);
+            } else check(false, "native capture source exists");
+            check(engine.removeSource("Capture ownership", name), "native parent audio teardown");
+        }
+        check(engine.removeScene("Capture ownership"), "remove capture scene");
+    } else std::cout << "SKIP native application capture unavailable\n";
+
+    check(engine.addSource("Mix", "test_tone", "Isolated 440 Hz", {{"frequency_hz", 440}, {"separate_audio_track", true}}), "isolated tone");
+    check(engine.addSource("Mix", "test_tone", "Mixed 880 Hz", {{"frequency_hz", 880}}), "mixed tone");
+    for (auto value : engine.sources("Mix")) {
+        const auto source = value.toObject(); const auto properties = source["properties"].toObject();
+        check(!properties.contains("capture_audio"), "optional capture setting not synthesized");
+        if (source["name"].toString() != "Isolated 440 Hz")
+            check(!properties.contains("separate_audio_track") && !properties.contains("recording_track"), "normal sources retain legacy option-free properties");
+    }
+    for (const auto& name : {"Isolated 440 Hz", "Mixed 880 Hz"}) {
+        auto* source = obs_get_source_by_name(name);
+        check(source && obs_source_get_audio_mixers(source) == (QString(name).startsWith("Isolated") ? 3u : 1u), "explicit mixer masks");
+        if (source) obs_source_release(source);
+    }
+    check(engine.saveConfiguration(output + "/tones-config.json") && engine.loadConfiguration(output + "/tones-config.json"), "track config roundtrip");
+    const auto before = engine.sources("Mix");
+    QFile saved(output + "/tones-config.json"); saved.open(QIODevice::ReadOnly);
+    auto invalid = QJsonDocument::fromJson(saved.readAll()).object(); saved.close();
+    auto scenes = invalid["scenes"].toArray(); auto scene = scenes[0].toObject(); auto sources = scene["sources"].toArray();
+    auto secondTone = sources[2].toObject(); secondTone["properties"] = QJsonObject{{"separate_audio_track", true}, {"recording_track", 2}};
+    sources[2] = secondTone; scene["sources"] = sources; scenes[0] = scene; invalid["scenes"] = scenes;
+    QFile bad(output + "/invalid-config.json"); bad.open(QIODevice::WriteOnly); bad.write(QJsonDocument(invalid).toJson()); bad.close();
+    expectError = true;
+    check(!engine.loadConfiguration(bad.fileName()) && engine.sources("Mix") == before, "duplicate track import rejected before graph mutation");
+    expectError = false;
+    // Fill remaining slots in another scene; sources in inactive scenes stay silent.
+    check(engine.addScene("Capacity"), "capacity scene");
+    for (int i = 0; i < 4; ++i) check(engine.addSource("Capacity", "test_tone", QString("Capacity %1").arg(i), {{"separate_audio_track", true}}), "track allocation");
+    expectError = true;
+    check(!engine.addSource("Capacity", "test_tone", "Overflow", {{"separate_audio_track", true}}), "sixth separate track rejected");
+    expectError = false;
+    check(engine.removeScene("Capacity"), "scene and track capacity released");
+    if (failed) { engine.shutdown(); return 1; }
+    check(engine.startStreaming(output + "/mixed-relay.flv") && engine.startReplay() && engine.startRecording(output + "/isolated.mkv"), "concurrent output start");
+    expectError = true;
+    check(!engine.removeSource("Mix", "Isolated 440 Hz"), "isolated removal blocked while recording");
+    check(!engine.removeScene("Mix"), "isolated scene removal blocked while recording");
+    check(!engine.addSource("Mix", "test_tone", "Live extra track", {{"separate_audio_track", true}}), "track topology fixed while recording");
+    expectError = false;
+    QTimer::singleShot(5000, &app, [&] { engine.saveReplay(); engine.stopRecording(); });
+    QTimer::singleShot(6000, &app, [&] {
+        check(engine.statistics()["streaming"].toBool(), "shared encoder survives recording stop");
+        check(engine.startRecording(output + "/restart.mkv"), "recording restart with separate encoder");
+    });
+    QTimer::singleShot(8500, &app, [&] { engine.stopRecording(); engine.stopReplay(); engine.stopStreaming(); });
+    QTimer::singleShot(10000, &app, [&] {
+        check(QFileInfo(output + "/isolated.mkv").size() > 0 && QFileInfo(output + "/restart.mkv").size() > 0, "recording files created");
+        check(replaySaved, "mixed replay saved");
+        check(engine.removeSource("Mix", "Isolated 440 Hz"), "remove isolated source after stop");
+        check(engine.addSource("Mix", "test_tone", "Gap 1320 Hz", {{"frequency_hz", 1320}, {"separate_audio_track", true}, {"recording_track", 3}}), "explicit track after gap");
+        check(engine.startRecording(output + "/gap.mkv"), "recording preserves track gap");
+        auto* recording = obs_get_output_by_name("FeatherCast recording");
+        if (recording) {
+            auto* gap = obs_output_get_audio_encoder(recording, 1);
+            auto* isolated = obs_output_get_audio_encoder(recording, 2);
+            check(gap && isolated && obs_encoder_get_mixer_index(gap) == 1 && obs_encoder_get_mixer_index(isolated) == 2, "physical MKV slots preserve assigned track numbers");
+            obs_output_release(recording);
+        } else check(false, "gap recording exists");
+    });
+    QTimer::singleShot(12500, &app, [&] { engine.stopRecording(); });
+    QTimer::singleShot(13500, &app, [&] {
+        engine.shutdown();
+        check(logErrors.load() == 0, "no OBS error logs or shutdown lifetime errors");
+        std::cout << (failed ? "SOURCE AUDIO SMOKE FAILED\n" : "SOURCE AUDIO SMOKE PASSED\n"); app.exit(failed ? 1 : 0);
+    });
+    return app.exec();
+}

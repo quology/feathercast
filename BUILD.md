@@ -35,3 +35,5 @@ Native media integration tests require a Windows graphics device. A hosted runne
 can compile the application and run portable core tests, but passing compilation
 does not establish real capture or hardware-encoder support. Record those results
 separately in `TEST_RESULTS.md`. Development artifacts are not stable releases.
+
+For source-audio and multitrack integration checks, run `feathercast_source_audio_smoke.exe OBS_RUNTIME OUTPUT_DIRECTORY` from the build directory with the Qt/compiler/OBS runtime DLL directories on PATH. It uses nonexistent app targets for capture ownership checks and synthetic tones for recordings; it does not capture a real user's application audio. Then run `python scripts/validate_source_audio.py OUTPUT_DIRECTORY/isolated.mkv --report OUTPUT_DIRECTORY/isolation.json` with FFmpeg/FFprobe on PATH to verify that the isolated track excludes the other test tone. `scripts/validate_media.py` checks and decodes every audio/video track.

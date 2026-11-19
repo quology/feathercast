@@ -32,11 +32,14 @@ public:
     bool addScene(const QString& name);
     bool removeScene(const QString& name);
     bool selectScene(const QString& name);
-    // Types: desktop, window, game, color, microphone, desktop_audio, test_tone.
+    // Types: desktop, window, game, color, microphone, desktop_audio, application_audio, test_tone.
+    // capture_audio enables window/game audio; desktop also requires audio_window.
+    // separate_audio_track reserves recording_track 2..6, keeping audio in mix 1.
     bool addSource(const QString& scene, const QString& type, const QString& name, QJsonObject properties = {});
     bool removeSource(const QString& scene, const QString& name);
     QJsonArray sources(const QString& scene) const;
     QJsonArray sourceOptions(const QString& type) const;
+    bool sourceAudioAvailable(const QString& type) const;
     void setSourceVisible(const QString& scene, const QString& name, bool visible);
     void setSourceAudio(const QString& name, double volume, bool muted);
     void attachPreview(quintptr nativeWindow, int width, int height);

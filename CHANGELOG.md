@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added optional application audio to display/window/game capture, an Application audio source, and separate source recording tracks alongside the normal mix (up to five isolated tracks). Source controls, meters, scene lifecycle and saved configuration include capture audio; streaming/replay keep the mixed track.
 - Refreshed the Qt workspace with neutral light/dark themes, monochrome primary actions, preview framing and compact tabbed monitoring docks.
 - Added settings category navigation, clearer automation grouping and descriptive scene/source controls while preserving saved dock identities and existing actions.
 
