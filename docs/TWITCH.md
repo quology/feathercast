@@ -1,6 +1,6 @@
 # Twitch integration in VELA
 
-Enable **View → Twitch channel** and **View → Twitch chat**. Both are native Qt docks: resize, move, tab, or float them independently. Their visibility and placement use the existing saved workspace layout. Connecting to Twitch does not start or configure a broadcast; streaming still uses the broadcast settings.
+Enable **Docks → Twitch channel** and **Docks → Twitch chat**. Both are native Qt docks: resize, move, tab, or float them independently. Their visibility and placement use the existing saved workspace layout. Connecting to Twitch does not start or configure a broadcast; streaming still uses the broadcast settings.
 
 ## One-time setup
 

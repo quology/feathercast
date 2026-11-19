@@ -66,7 +66,8 @@ void applyTheme(bool dark) {
     QTabBar::tab:selected { background: @surface; color: @text; border-color: @border; border-radius: 5px; }
     QTabBar::tab:hover { color: @text; }
     QMenuBar, QMenu { background: @surface; }
-    QMenuBar { border-bottom: 1px solid @border; padding: 3px 8px; }
+    QMenuBar { border-bottom: 1px solid @border; padding: 0 2px; }
+    QMenuBar::item { padding: 4px 7px; }
     QMenu { border: 1px solid @border; padding: 4px; }
     QMenu::item { padding: 7px 24px; border-radius: 4px; }
     QMenu::item:selected, QMenuBar::item:selected { background: @muted; }

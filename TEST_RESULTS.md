@@ -1,5 +1,10 @@
 # Verified test results
 
+## Workspace menu — 19 November 2026
+
+- Release build passed and CTest passed 5/5. An isolated UI self-test passed all 12 Boolean checks.
+- Dark and light widget screenshots were captured at default size and at 884 pixels wide; the menu row fits. Widget captures exclude the native title bar and preview. Native menu interaction and keyboard checks remain pending coordinator review.
+
 ## Twitch integration and VELA branding — 19 November 2026
 
 - The Windows Release build produced `VELA.exe` with the VELA icon and product metadata. CTest passed 5/5. The main window passed all 12 integrated checks in each theme. The header and icon were inspected in the running app.

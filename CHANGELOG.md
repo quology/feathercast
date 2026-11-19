@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added a compact eight-menu workspace bar with dock toggles and existing scene, source, settings and tool actions.
 - Rebranded the desktop app as VELA (Video Encoding and Livestreaming Application), with a new Windows icon and `VELA.exe` package entry point. Existing profiles and stream keys are retained.
 - Added native Twitch channel and chat docks with public device authorization, Windows-protected tokens, editable channel metadata, live status, and text chat.
 

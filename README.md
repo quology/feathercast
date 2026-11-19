@@ -11,6 +11,7 @@ VELA (Video Encoding and Livestreaming Application), formerly FeatherCast, is a 
 - Live 0–300 second packet delay with bounded memory and keyframe cuts. Increasing delay holds output and can time out ingest; decreasing it intentionally removes content. Effective delay is approximate.
 - Visual priority automation with OR-of-AND conditions, ordered actions, debounce, cooldown, manual override, fallback and transactional JSON import/export. Process snapshots poll every 500 ms.
 - Global Windows hotkeys, settings/layout persistence, dark/light themes, module gates and separately DPAPI-protected stream keys.
+- Compact top menus for workspace, dock, scene and source controls, with keyboard access.
 - Asynchronous MKV-to-MP4 remux without re-encoding; native plugin ABI v1 custom actions and a working 90-second delay example.
 
 See [feature status](docs/FEATURE_STATUS.md), [user guide](docs/USER_GUIDE.md), [test results](TEST_RESULTS.md) and [release notes](docs/RELEASE_NOTES.md).

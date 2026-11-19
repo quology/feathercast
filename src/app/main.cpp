@@ -296,7 +296,8 @@ public:
   Window(QString path, bool isSmoke) : dir(std::move(path)), smoke(isSmoke) {
     QDir().mkpath(dir);
     config = dir + "/engine.json";
-    setWindowTitle(QGuiApplication::applicationDisplayName());
+    setWindowTitle(QGuiApplication::applicationDisplayName() + " " +
+                   QCoreApplication::applicationVersion());
     resize(1280, 800);
     auto *header = addToolBar("Workspace");
     header->setObjectName("WorkspaceHeader");
@@ -380,14 +381,14 @@ public:
     sl->addWidget(scenes);
     auto sr = new QHBoxLayout;
     sl->addLayout(sr);
-    button("Add scene", sr, [this] {
+    auto *addScene = button("Add scene", sr, [this] {
       bool ok = false;
       auto n = QInputDialog::getText(this, "Add scene", "Name",
                                      QLineEdit::Normal, {}, &ok);
       if (ok)
         engine.addScene(n);
     });
-    button("Remove", sr, [this] {
+    auto *removeScene = button("Remove", sr, [this] {
       if (scenes->currentItem())
         engine.removeScene(scenes->currentItem()->text());
     });
@@ -400,8 +401,8 @@ public:
     sol->addWidget(sources);
     auto sor = new QHBoxLayout;
     sol->addLayout(sor);
-    button("Add source", sor, [this] { addSource(); });
-    button("Remove", sor, [this] {
+    auto *addSourceButton = button("Add source", sor, [this] { addSource(); });
+    auto *removeSource = button("Remove", sor, [this] {
       if (sources->currentItem())
         engine.removeSource(engine.currentScene(),
                             sources->currentItem()->text());
@@ -517,18 +518,59 @@ public:
 #ifdef FEATHERCAST_TWITCH
     feathercast::ui::installTwitchDocks(this, dir);
 #endif
-    auto view = menuBar()->addMenu("View");
-    for (auto d : findChildren<QDockWidget *>())
-      view->addAction(d->toggleViewAction());
+    auto *file = menuBar()->addMenu("&File");
+    file->addAction("Save configuration", this, [this] {
+      saveConfig();
+    });
+    file->addAction("Open configuration folder", this, [this] {
+      QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
+    });
+    file->addAction("Open output folder", this, [this] {
+      QDesktopServices::openUrl(QUrl::fromLocalFile(engine.settings()["outputDirectory"].toString()));
+    });
+    file->addSeparator();
+    file->addAction("Settings…", this, [this] { settingsDialog(); });
+    file->addSeparator();
+    file->addAction("Exit", this, &QWidget::close);
+    auto *edit = menuBar()->addMenu("&Edit");
+    edit->addAction("Add scene…", addScene, &QPushButton::click);
+    auto *removeSceneAction = edit->addAction("Remove selected scene", removeScene, &QPushButton::click);
+    edit->addSeparator();
+    edit->addAction("Add source…", addSourceButton, &QPushButton::click);
+    auto *removeSourceAction = edit->addAction("Remove selected source", removeSource, &QPushButton::click);
+    auto *filtersAction = edit->addAction("Microphone filters…", filters, &QPushButton::click);
+    connect(edit, &QMenu::aboutToShow, this, [this, removeSceneAction, removeSourceAction, filtersAction, filters] {
+      removeSceneAction->setEnabled(scenes->currentItem());
+      removeSourceAction->setEnabled(sources->currentItem());
+      filtersAction->setEnabled(filters->isEnabled());
+    });
+    auto *view = menuBar()->addMenu("&View");
     auto previewToggle = view->addAction("Enable preview drawing");
     previewToggle->setCheckable(true);
     previewToggle->setChecked(engine.settings()["previewEnabled"].toBool());
     connect(previewToggle, &QAction::toggled, this,
             [this](bool on) { engine.setPreviewEnabled(on); });
-    menuBar()->addAction("Global hotkeys…", this,
-                        [this] { automationPanel->editHotkeys(this); });
-    menuBar()->addAction("Settings…", this, [this] { settingsDialog(); });
+    connect(view, &QMenu::aboutToShow, this, [this, previewToggle] {
+      const QSignalBlocker blocker(previewToggle);
+      previewToggle->setChecked(engine.settings()["previewEnabled"].toBool());
+    });
     view->addAction("Advanced Audio Properties…", this, [this] { audioDialog(); });
+    auto *docks = menuBar()->addMenu("&Docks");
+    for (auto d : findChildren<QDockWidget *>())
+      docks->addAction(d->toggleViewAction());
+    auto *profile = menuBar()->addMenu("&Profile");
+    profile->addAction("Default (single profile)")->setEnabled(false);
+    auto *collections = menuBar()->addMenu("&Scene Collection");
+    collections->addAction("Single scene collection")->setEnabled(false);
+    auto *tools = menuBar()->addMenu("&Tools");
+    tools->addAction("Global hotkeys…", this,
+                     [this] { automationPanel->editHotkeys(this); });
+    tools->addAction("Remux MKV to MP4…", this, [this] { remuxDialog(); });
+    auto *help = menuBar()->addMenu("&Help");
+    help->addAction("About VELA", this, [this] {
+      QMessageBox::about(this, "About VELA", "VELA " + QCoreApplication::applicationVersion() +
+                         "\nVideo Encoding and Livestreaming Application");
+    });
     ui.beginGroup("visibility");
     for (const auto &k : ui.childKeys())
       visibility[QString::fromUtf8(QByteArray::fromBase64(
