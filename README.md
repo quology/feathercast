@@ -3,13 +3,15 @@
 The workspace provides scene and source hierarchy editing, source properties and transforms, video and microphone filters, an audio mixer, Studio preview/program and transitions, Twitch docks, and live output status. The View menu can reset the dock layout. See the user guide for operating details.
 
 
-VELA (Video Encoding and Livestreaming Application), formerly FeatherCast, is a native Windows broadcasting application using C++20, Qt 6 and standalone libobs. No running OBS Studio instance is required. This private **0.1.0-dev.1 development preview** is not stable v1 or full OBS feature parity.
+VELA (Video Encoding and Livestreaming Application), formerly FeatherCast, is a native Windows broadcasting application using C++20, Qt 6 and standalone libobs. No running OBS Studio instance is required. This local **0.1.0-dev.4-workspace-r1 development preview** is not stable v1 or full OBS feature parity.
+
+Application source `4dcf30f` [passed all CI jobs](https://github.com/quology/feathercast/actions/runs/44560702657). The local r1 package passed 14 UI checks and validation of three synthetic media outputs. The repository is currently public; publishing these binaries remains unapproved.
 
 ## Implemented features
 
 - Dockable scenes/sources, real capture/device options, volume/mute and actual libobs audio peak meters.
 - Optional application-only audio for display/window/game capture. Advanced Audio Properties controls gain, mono, balance, sync, monitoring and six independent recording tracks.
-- Twitch account connection, channel title/category/tag editing, live status, and a dockable text chat. See the [Twitch setup guide](docs/TWITCH.md).
+- Twitch account connection, channel title/category/tag editing, live status, text chat, activity feed and statistics/goals docks with optional permissions. See the [Twitch setup guide](docs/TWITCH.md).
 - Shared H.264/AAC encoders for independent streaming, MKV recording and replay; simultaneous outputs tested separately with x264 and RTX 4070 NVENC.
 - Live 0–300 second packet delay with bounded memory and keyframe cuts. Increasing delay holds output and can time out ingest; decreasing it intentionally removes content. Effective delay is approximate.
 - Visual priority automation with OR-of-AND conditions, ordered actions, debounce, cooldown, manual override, fallback and transactional JSON import/export. Process snapshots poll every 500 ms.
@@ -27,6 +29,6 @@ Extract the entire portable ZIP and run `VELA.exe`. Keep runtime/data directorie
 
 ## Limits and license
 
-Outputs share resolution and video quality. Streaming and replay use stereo AAC track 1. MKV recordings support six assignable stereo AAC tracks. Application audio captures the app, not an individual tab, and actual Windows application isolation remains unverified. Recording splitting, live disk-pressure protection, disk-backed delay, broad plugin extension types and plugin isolation are absent. External platforms, visual capture/preview, protected games, AMF/QSV hardware and comparable gaming performance remain unverified. CPU/GPU utilization is unavailable.
+Outputs share resolution and video quality. Streaming and replay use stereo AAC track 1. MKV recordings support six assignable stereo AAC tracks. Application audio captures the app, not an individual tab, and actual Windows application isolation remains unverified. Recording splitting, live disk-pressure protection, disk-backed delay, broad plugin extension types and plugin isolation are absent. External platforms, visual capture/preview, protected games, AMF/QSV hardware and comparable gaming performance remain unverified. CPU utilization is measured and cached for at least 500 ms; GPU utilization is unavailable.
 
 VELA is GPL-3.0-or-later. OBS, Qt, FFmpeg and other dependencies retain their licenses; preserve supplied notices and source URLs. A complete public redistribution/license/corresponding-source audit remains pending. Source is in `quology/feathercast`; no public stable redistribution is claimed.

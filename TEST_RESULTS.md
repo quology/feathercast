@@ -1,5 +1,13 @@
 # Verified test results
 
+## Local r1 delivery — 19 November 2026
+
+- Application source `4dcf30fb5987e2e3cb33bf66facd288295a38f40` passed all [CI jobs](https://github.com/quology/feathercast/actions/runs/44560702657). Earlier workspace source e82f380 separately passed run44558221420.
+- Portable `0.1.0-dev.4-workspace-r1` hidden UI fixture exited0, all14 Boolean checks true (`work/packaged-workspace-r1-verification/ui.json`). Earlier final source restart4/4 and coordinate9/9 checks include144 atomic snapshots and six immediate reloads.
+- Strengthened native NVENC smoke against r1 packaged dependencies, with PATH restricted to stage and Windows, exited0/SMOKE PASSED (`work/packaged-workspace-r1-media/native.log`). At11sec, streamDurationMs8983.9369, recording10985.9544, replay10985.6143; relayConnected true, relayError0. All advancing and stopped-zero assertions passed.
+- All3 finalized synthetic outputs passed full decode, DTS, first-keyframe and A/V end-skew validation (`work/packaged-workspace-r1-media/media-validation.json`). No real Twitch/capture/monitoring or general performance claim follows.
+- Local distribution only. Repository is currently reported public; the user confirmed local-only binary distribution. Corresponding-source/public license audit remains incomplete.
+
 ## Workspace UI — 19 November 2026
 
 - `scripts/build.ps1 -SkipBootstrap -Configuration Release` passed; CTest passed 5/5. The existing integrated UI self-test passed all 12 Boolean checks in an isolated profile.

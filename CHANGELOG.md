@@ -1,10 +1,13 @@
 # Changelog
 
-## Workspace controls — 19 November 2026
+## 0.1.0-dev.4-workspace-r1 — development preview, 19 November 2026
 
+- Fixed live output timers to latch first native activation, retain elapsed time through relay reconnects and return zero after stop.
 - Added native scene ordering, duplication and renaming; source groups, ordering, visibility, locking, properties, transforms and video filters.
 - Added an audio mixer using measured libobs peaks and actual gain, mute, monitoring and scene/global settings; added Studio Mode, transitions, disabled-preview recovery and measured status.
-- Added a resettable dock layout with Twitch activity, chat and stats. Virtual camera is not included.
+- Added a resettable dock layout with four Twitch docks and optional activity permissions. Virtual camera is not included.
+- Fixed grouped-source repeated Apply and immediate-save/reload placement; native group origins may rebase while world placement remains fixed. CPU samples are cached for at least 500 ms.
+- Release CTest 5/5, coordinate 9/9, workspace UI 14/14 and restart 4/4 passed; source checkpoint 4dcf30f [CI passed](https://github.com/quology/feathercast/actions/runs/44560702657).
 
 
 ## Unreleased

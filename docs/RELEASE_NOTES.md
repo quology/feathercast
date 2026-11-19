@@ -1,3 +1,17 @@
+# VELA 0.1.0-dev.4-workspace-r1 — development preview
+
+19 November 2026. Local development preview; source checkpoint `4dcf30f`.
+
+Scene editing and native source groups, locks, ordering, properties and transforms are available, with three video filter types and existing microphone filters. The mixer provides real aggregate peaks, gain, mute, monitoring, scope, hide/show and Advanced Audio Properties. Studio Mode has two native views, Cut/Fade and duration controls; preview-off recovery, CPU/FPS and output timers are available. Four Twitch docks support channel, chat, activity and statistics/goals with optional permissions. Existing layouts are retained; View → Reset Workspace Layout shows the new docks.
+
+Grouped coordinates remain parent-local and may rebase while world placement stays fixed. Repeated unchanged Apply, nested placement, duplication and reload passed the strengthened synthetic checks. Release build and CTest 5/5 passed; coordinate checks passed 9/9, production UI 14/14 and restart 4/4. The r1 timer fix latches first native output activation, survives initial NVENC retry and reconnect, and returns zero after stop. Release CTest 5/5 and six finalized media validations passed for this fix. Current source `4dcf30f` [CI passed](https://github.com/quology/feathercast/actions/runs/44560702657); packaged r1 UI passed 14/14 and all three finalized media files passed full decode/timestamp/keyframe/end-skew validation. Native NVENC smoke passed with stream duration 8983.9369 ms, relay connected and relayError 0; prior workspace source `e82f380` passed [44558221420](https://github.com/quology/feathercast/actions/runs/44558221420). The earlier foundation run [44549637152](https://github.com/quology/feathercast/actions/runs/44549637152) passed for its own checkpoint.
+
+No virtual camera or full OBS parity is claimed. Real Twitch account behavior, actual capture and physical monitoring remain manual checks. Lifetime channel views are unavailable; local activity dismissal does not skip external alerts. One profile/collection is supported; game/window global audio uses Application Audio, and capture-audio topology is creation-only. GPU utilization, broad performance improvements and public redistribution sign-off remain unavailable or unverified.
+
+See [test results](../TEST_RESULTS.md) for exact evidence and historical validation.
+
+---
+
 # FeatherCast 0.1.0-dev.1 — development preview
 
 18 November 2026. Private milestone, not stable v1 or full OBS feature parity.
