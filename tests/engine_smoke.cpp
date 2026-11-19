@@ -24,6 +24,7 @@ int main(int argc, char** argv) {
     }, &logErrors);
     Engine engine;
     bool failed = false, replaySaved = false;
+    double streamAtSixSeconds = 0;
     QObject::connect(&engine, &Engine::errorOccurred, &app, [&](const QString& text) { failed = true; std::cerr << "ERROR " << text.toStdString() << '\n'; });
     QObject::connect(&engine, &Engine::logMessage, &app, [](const QString& text) { std::cout << "INFO " << text.toStdString() << '\n'; });
     QObject::connect(&engine, &Engine::replaySaved, &app, [&](const QString& file) { replaySaved = QFileInfo(file).size() > 0; std::cout << "REPLAY " << file.toStdString() << '\n'; });
@@ -41,16 +42,25 @@ int main(int argc, char** argv) {
     if (!engine.startRecording(output + "/recording.mkv") || !engine.startReplay() ||
         !engine.startStreaming(args.size() > 3 ? args[3] : output + "/relay.flv")) return 1;
     QTimer::singleShot(2500, &app, [&] { engine.setDelayMs(1800); std::cout << "DELAY increase\n"; });
-    QTimer::singleShot(6000, &app, [&] { engine.setDelayMs(0); engine.saveReplay(); std::cout << "DELAY decrease, replay requested\n"; });
-    QTimer::singleShot(10000, &app, [&] {
+    QTimer::singleShot(6000, &app, [&] { engine.setDelayMs(0); engine.saveReplay(); streamAtSixSeconds = engine.statistics()["streamDurationMs"].toDouble(); std::cout << "DELAY decrease, replay requested\n"; });
+    QTimer::singleShot(11000, &app, [&] {
         const auto stats = engine.statistics();
         std::cout << "STATS " << QJsonDocument(stats).toJson(QJsonDocument::Compact).toStdString() << '\n';
         if (!stats["relayConnected"].toBool() || stats["relayError"].toInt() != 0 ||
             stats["streamBytes"].toDouble() <= 0 || stats["effectiveDelayMs"].toDouble() > 1300) failed = true;
+        for (const auto* key : {"streamDurationMs", "recordingDurationMs", "replayDurationMs"}) {
+            if (stats[key].toDouble() <= 8000) { failed = true; std::cerr << "FAILED live duration " << key << '\n'; }
+        }
+        if (streamAtSixSeconds <= 0 || stats["streamDurationMs"].toDouble() - streamAtSixSeconds < 4000) {
+            failed = true; std::cerr << "FAILED stream clock did not advance continuously\n";
+        }
         engine.stopStreaming(); engine.stopRecording(); engine.stopReplay();
     });
-    QTimer::singleShot(12000, &app, [&] {
+    QTimer::singleShot(13000, &app, [&] {
         const auto stats = engine.statistics();
+        for (const auto* key : {"streamDurationMs", "recordingDurationMs", "replayDurationMs"}) {
+            if (stats[key].toDouble() != 0) { failed = true; std::cerr << "FAILED stopped duration " << key << '\n'; }
+        }
         if (stats["streaming"].toBool() || stats["recording"].toBool() || stats["replay"].toBool()) failed = true;
         if (QFileInfo(output + "/recording.mkv").size() <= 0 || !replaySaved) failed = true;
         if (!engine.saveConfiguration(output + "/configuration.json")) failed = true;

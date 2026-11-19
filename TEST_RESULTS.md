@@ -3,9 +3,9 @@
 ## Workspace UI — 19 November 2026
 
 - `scripts/build.ps1 -SkipBootstrap -Configuration Release` passed; CTest passed 5/5. The existing integrated UI self-test passed all 12 Boolean checks in an isolated profile.
-- The native D3D11 workspace fixture used only a synthetic color and test tone and passed 12 controller checks: hierarchy/selection, visibility/locking, source property and transform Apply, video filter add/bypass/reorder/edit/remove, mixer gain/mute/global/hide/show, Studio take, transition controls, preview-off recovery and configuration save. A second process verified persisted hierarchy, audio and Studio transition. Monitoring-device changes and real capture targets were not exercised by this fixture.
+- The final native D3D11 workspace fixture used only a synthetic color and test tone and passed 14 Boolean checks, including composed world placement and repeated unchanged Apply, plus: hierarchy/selection, visibility/locking, source property and transform Apply, video filter add/bypass/reorder/edit/remove, mixer gain/mute/global/hide/show, Studio take, transition controls, preview-off recovery and configuration save. A second process passed 4 restart checks for persisted hierarchy, audio, Studio transition and world placement. Monitoring-device changes and real capture targets were not exercised by this fixture.
 - Dark and light QWidget captures were saved under `outputs/workspace-ui/handoff-*.png` and the later `offscreen-check.png` for 1920×1080 and 1366×768. QWidget capture excludes the native preview/program HWND content. Twitch was disconnected and no account activity or messages were generated. At the smaller size, dock contents may require scrolling.
-- One earlier grouped-color test intermittently read a local x near zero after editing width and x=37; width read back as 1281. Group recentering and world placement/save-reload semantics require investigation. The current fixture exercises rotation instead and does not establish that position behavior. Evidence is retained in `outputs/workspace-ui/review-dark-1920x1080-profile/engine.json` and its JSON result.
+- The earlier grouped-color failure is resolved: legitimate parent-local rebasing was distinguished from repeated-Apply and immediate-reload drift, and both defects were fixed. The fixture again tests real position edits. Original evidence remains in `outputs/workspace-ui/review-dark-1920x1080-profile/engine.json` and its JSON result; see “Group coordinates and idempotent Properties Apply” below for preserved reproductions and final 9/9 coordinate, 14/14 UI and 4/4 restart results.
 - Actual authenticated Twitch behavior and live application capture remain manual verification items. The fixture does not replace the engine's separate native integration tests.
 
 
@@ -235,3 +235,35 @@ Final checks:
 Fixtures used only generated color/tone sources and isolated profiles. Dialogs and
 fixture application windows stayed offscreen; these checks establish geometry and
 controller behavior, not a new visible-desktop layout or real-capture benchmark.
+
+
+## 2026-11-19 — relay live-duration lifecycle regression
+
+The final packaged NVENC smoke exposed an advancing stream with a zero live timer.
+A preserved native signal trace (`work/relay-timer-repro.log`) reproduced the defect:
+the relay initially retried before capture, then OBS emitted `activate` and
+`reconnect_success`, without `start`. Engine clocks now latch the first capture
+activation in a stable per-output atomic callback context, retain that epoch during
+reconnect, and reset it when a new output session is connected. Stopped outputs
+report zero. Relay transport and encoder behavior were not changed.
+
+- Release build and all 5 CTest tests passed (`work/relay-timer-build.log`).
+- Strengthened native output smoke passed with NVENC: at approximately 11 seconds,
+  streaming duration was 8995 ms after the initial 2-second retry; recording/replay
+  were 10997/10997 ms. It asserts all live durations exceed 8 seconds, stream time
+  advances by at least 4 seconds between the 6-second and final samples, and all
+  three durations return to zero after stop (`work/relay-timer-nvenc.log`).
+- An intentionally terminated/restarted local RTMP receiver produced one reconnect;
+  the same clock assertions passed with streaming duration 8982 ms, retaining the
+  original capture epoch (`work/relay-timer-reconnect-20261119/reconnect-result.json`).
+- Full decode, strictly increasing packet DTS, initial keyframes, and audio/video
+  end-skew checks passed for all 6 finalized media files across these two runs;
+  reports are `media-validation.json` in their respective output directories.
+  The intentionally interrupted receiver partial file is excluded.
+
+Both fixtures shut down normally with no OBS error-level messages. Logs retain
+non-admin GPU priority diagnostics and OBS debug packet-timing messages during
+shared-encoder shutdown; these are not suppressed. These checks use synthetic
+color/tone and a local receiver, not a Twitch session or performance benchmark.
+The prior package/ZIP was preserved; these results cover the newly built source
+binary and provisioned OBS33 runtime, pending coordinator package regeneration.

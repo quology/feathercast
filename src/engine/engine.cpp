@@ -302,7 +302,14 @@ struct Engine::Impl {
     os_cpu_usage_info_t* cpu{};
     uint64_t cpuSampleNs{};
     double cpuPercent{};
-    std::atomic<uint64_t> streamStarted{}, recordingStarted{}, replayStarted{};
+    // Stable callback contexts: worker callbacks never read mutable output
+    // pointers. Disconnect synchronizes with callbacks before Impl is destroyed.
+    struct OutputClock { Impl* owner; std::atomic<uint64_t> started{}; };
+    OutputClock streamClock{this}, recordingClock{this}, replayClock{this};
+    OutputClock& outputClock(obs_output_t* output) {
+        Q_ASSERT(output && (output == stream || output == recording || output == replay));
+        return output == stream ? streamClock : output == recording ? recordingClock : replayClock;
+    }
     int row(const Scene& scene, const QString& name) const {
         for (int i = 0; i < scene.sources.size(); ++i) if (scene.sources[i].toObject()["name"] == name) return i;
         return -1;
@@ -346,14 +353,14 @@ struct Engine::Impl {
     bool fail(const QString& message) { emit q->errorOccurred(message); return false; }
     bool outputsActive() const { return active(stream) || active(recording) || active(replay); }
     void notify() { QMetaObject::invokeMethod(q, [owner = q] { emit owner->stateChanged(); }, Qt::QueuedConnection); }
-    static void outputEvent(void* data, calldata_t* cd) {
-        auto* self = static_cast<Impl*>(data);
-        auto* output = static_cast<obs_output_t*>(calldata_ptr(cd, "output"));
-        const auto now = os_gettime_ns();
-        if (output == self->stream) self->streamStarted = now;
-        if (output == self->recording) self->recordingStarted = now;
-        if (output == self->replay) self->replayStarted = now;
-        self->notify();
+    static void outputEvent(void* data, calldata_t*) {
+        auto& clock = *static_cast<OutputClock*>(data);
+        uint64_t unset = 0;
+        // First data-capture activation is authoritative, including an initial
+        // reconnect_success path that never emits "start". Later activations
+        // during reconnect keep the original capture-session epoch.
+        clock.started.compare_exchange_strong(unset, os_gettime_ns());
+        clock.owner->notify();
     }
     static void outputStop(void* data, calldata_t* cd) {
         auto* self = static_cast<Impl*>(data);
@@ -376,14 +383,15 @@ struct Engine::Impl {
     }
     void connectOutput(obs_output_t* output, bool isReplay = false) {
         auto* handler = obs_output_get_signal_handler(output);
-        signal_handler_connect(handler, "start", outputEvent, this);
+        auto& clock = outputClock(output); clock.started = 0;
+        signal_handler_connect(handler, "activate", outputEvent, &clock);
         signal_handler_connect(handler, "stop", outputStop, this);
         if (isReplay) signal_handler_connect(handler, "saved", replayEvent, this);
     }
     void releaseOutput(obs_output_t*& output) {
         if (!output) return;
         auto* handler = obs_output_get_signal_handler(output);
-        signal_handler_disconnect(handler, "start", outputEvent, this);
+        signal_handler_disconnect(handler, "activate", outputEvent, &outputClock(output));
         signal_handler_disconnect(handler, "stop", outputStop, this);
         signal_handler_disconnect(handler, "saved", replayEvent, this);
         if (active(output)) obs_output_force_stop(output);
@@ -1161,9 +1169,9 @@ QJsonObject Engine::statistics() const {
     }
     result["cpuPercent"] = d->cpuPercent;
     const auto elapsed = [](obs_output_t* output, uint64_t start) -> double { return active(output) && start ? double(os_gettime_ns() - start) / 1000000 : 0; };
-    result["streamDurationMs"] = elapsed(d->stream, d->streamStarted);
-    result["recordingDurationMs"] = elapsed(d->recording, d->recordingStarted);
-    result["replayDurationMs"] = elapsed(d->replay, d->replayStarted);
+    result["streamDurationMs"] = elapsed(d->stream, d->streamClock.started);
+    result["recordingDurationMs"] = elapsed(d->recording, d->recordingClock.started);
+    result["replayDurationMs"] = elapsed(d->replay, d->replayClock.started);
     const auto relay = relayStats(d->stream);
     result["fps"] = obs_get_active_fps(); result["renderMs"] = static_cast<double>(obs_get_average_frame_time_ns()) / 1000000;
     result["renderSkippedFrames"] = static_cast<double>(obs_get_lagged_frames()); result["totalFrames"] = static_cast<double>(obs_get_total_frames());

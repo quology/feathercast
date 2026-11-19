@@ -137,8 +137,11 @@ activation. Removing the owner removes global routing. `mixer_hidden` does not m
 
 `statistics()` adds measured `cpuPercent`, `streamDurationMs`, `recordingDurationMs`,
 `replayDurationMs`, `programScene`, `studioMode`, and `transitionActive`. Durations
-begin on genuine OBS output start signals and are zero while stopped; reconnect
-signals do not reset them. Existing actual FPS, frame-time, byte and audio-meter
+begin on the first successful OBS data-capture `activate` signal of each output
+session, including initial connection retries that emit `reconnect_success` instead
+of `start`. They are zero before first capture and while stopped. Reconnects retain
+the original epoch (elapsed time includes reconnect downtime); a new user-started
+output resets its epoch. Existing actual FPS, frame-time, byte and audio-meter
 fields remain available. CPU is sampled at most once per 500 ms and finite samples
 are cached for all readers; rapid mixer/status polling does not query the native
 CPU sampler back-to-back. Zero is the initial value before the first sample.
