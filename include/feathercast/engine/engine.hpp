@@ -21,7 +21,7 @@ public:
     QJsonObject settings() const;
     // Requires all outputs stopped; keeps scene graph while resetting video.
     bool applySettings(const QJsonObject& settings);
-    bool loadConfiguration(const QString& path);
+    bool loadConfiguration(const QString& path, const QJsonObject& legacySourceAudio = {});
     bool saveConfiguration(const QString& path) const;
     bool storeStreamKey(const QString& key);
     QString streamKey() const;
@@ -41,6 +41,12 @@ public:
     QJsonArray sourceOptions(const QString& type) const;
     bool sourceAudioAvailable(const QString& type) const;
     void setSourceVisible(const QString& scene, const QString& name, bool visible);
+    // Each row contains name, scene, active and the canonical audio properties.
+    QJsonArray audioSources() const;
+    QJsonObject audioProperties(const QString& name) const;
+    bool setAudioProperties(const QString& name, const QJsonObject& patch);
+    bool audioMonitoringAvailable() const;
+    bool recordingActive() const;
     void setSourceAudio(const QString& name, double volume, bool muted);
     void attachPreview(quintptr nativeWindow, int width, int height);
     void resizePreview(int width, int height);

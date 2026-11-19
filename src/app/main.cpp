@@ -1,94 +1,13 @@
 #include "feathercast/engine/engine.hpp"
 #include "feathercast/ui/automation_panel.hpp"
+#include "feathercast/ui/advanced_audio_dialog.hpp"
+#include "feathercast/ui/theme.hpp"
 #include <QCommandLineParser>
 #include <QJsonDocument>
 #include <QSaveFile>
 #include <QtWidgets>
 using feathercast::engine::Engine;
-// Shared neutral tokens keep dialogs, floating docks and both themes consistent.
-static void applyTheme(bool dark) {
-  const QString background = dark ? "#09090b" : "#fafafa";
-  const QString surface = dark ? "#18181b" : "#ffffff";
-  const QString muted = dark ? "#27272a" : "#f4f4f5";
-  const QString border = dark ? "#3f3f46" : "#d4d4d8";
-  const QString text = dark ? "#fafafa" : "#18181b";
-  const QString secondary = dark ? "#a1a1aa" : "#52525b";
-  QPalette palette;
-  palette.setColor(QPalette::Window, QColor(background));
-  palette.setColor(QPalette::WindowText, QColor(text));
-  palette.setColor(QPalette::Base, QColor(surface));
-  palette.setColor(QPalette::AlternateBase, QColor(muted));
-  palette.setColor(QPalette::Text, QColor(text));
-  palette.setColor(QPalette::Button, QColor(surface));
-  palette.setColor(QPalette::ButtonText, QColor(text));
-  palette.setColor(QPalette::Highlight, QColor(muted));
-  palette.setColor(QPalette::HighlightedText, QColor(text));
-  palette.setColor(QPalette::ToolTipBase, QColor(surface));
-  palette.setColor(QPalette::ToolTipText, QColor(text));
-  palette.setColor(QPalette::PlaceholderText, QColor(secondary));
-  palette.setColor(QPalette::Disabled, QPalette::Text, QColor(secondary));
-  palette.setColor(QPalette::Disabled, QPalette::ButtonText, QColor(secondary));
-  qApp->setPalette(palette);
-  QString style = R"(
-    QWidget { color: @text; font-family: "Segoe UI"; font-size: 10pt; }
-    QMainWindow, QDialog { background: @background; }
-    QMainWindow::separator { background: @background; width: 6px; height: 6px; }
-    QMainWindow::separator:hover { background: @border; }
-    QDockWidget { background: @surface; border: 1px solid @border; }
-    QDockWidget::title { background: @surface; padding: 10px 12px; border-bottom: 1px solid @border; font-weight: 600; }
-    QToolBar { background: @surface; border: 0; border-bottom: 1px solid @border; spacing: 12px; padding: 10px 16px; }
-    QLabel[role="heading"] { font-size: 16pt; font-weight: 600; }
-    QLabel[role="section"] { font-weight: 600; padding: 2px 0; }
-    QLabel[role="muted"] { color: @secondary; }
-    QLabel[role="badge"] { background: @muted; color: @secondary; border: 1px solid @border; border-radius: 5px; padding: 4px 8px; font-size: 9pt; }
-    QWidget#previewCard { background: @surface; border: 1px solid @border; border-radius: 8px; }
-    QPushButton { background: @surface; border: 1px solid @border; border-radius: 6px; padding: 6px 12px; min-height: 18px; font-weight: 500; }
-    QPushButton:hover { background: @muted; }
-    QPushButton:pressed { background: @border; }
-    QPushButton:focus, QToolButton:focus { border: 2px solid @secondary; padding: 5px 11px; }
-    QPushButton[variant="primary"], QDialogButtonBox QPushButton:default { background: @text; color: @background; border-color: @text; font-weight: 600; }
-    QPushButton[variant="primary"]:hover, QDialogButtonBox QPushButton:default:hover { background: @secondary; border-color: @secondary; }
-    QPushButton:disabled { background: @muted; color: @secondary; border-color: @border; }
-    QLineEdit, QAbstractSpinBox, QComboBox, QKeySequenceEdit { background: @surface; border: 1px solid @border; border-radius: 6px; padding: 5px 8px; min-height: 20px; selection-background-color: @muted; selection-color: @text; }
-    QLineEdit:focus, QAbstractSpinBox:focus, QComboBox:focus, QKeySequenceEdit:focus { border: 1px solid @secondary; }
-    QComboBox { padding-right: 24px; }
-    QComboBox::drop-down { border: 0; width: 22px; }
-    QComboBox QAbstractItemView { background: @surface; border: 1px solid @border; selection-background-color: @muted; selection-color: @text; padding: 4px; }
-    QListWidget, QTableWidget { background: @surface; alternate-background-color: @muted; border: 1px solid @border; border-radius: 6px; padding: 3px; outline: 0; gridline-color: @border; }
-    QListWidget::item { padding: 7px 9px; border-radius: 4px; }
-    QListWidget::item:hover { background: @muted; }
-    QListWidget::item:selected { background: @muted; color: @text; }
-    QListWidget::item:focus { border: 1px solid @secondary; }
-    QHeaderView::section { background: @muted; border: 0; border-bottom: 1px solid @border; padding: 7px; color: @secondary; font-weight: 500; }
-    QCheckBox { spacing: 8px; padding: 3px 0; }
-    QCheckBox::indicator { width: 16px; height: 16px; }
-    QCheckBox::indicator:unchecked { background: @surface; border: 1px solid @border; border-radius: 4px; }
-    QCheckBox::indicator:unchecked:hover { border-color: @secondary; }
-    QTabWidget::pane { background: @surface; border: 1px solid @border; border-radius: 6px; }
-    QTabBar::tab { background: @background; color: @secondary; padding: 7px 12px; border: 1px solid transparent; }
-    QTabBar::tab:selected { background: @surface; color: @text; border-color: @border; border-radius: 5px; }
-    QTabBar::tab:hover { color: @text; }
-    QMenuBar, QMenu { background: @surface; }
-    QMenuBar { border-bottom: 1px solid @border; padding: 3px 8px; }
-    QMenu { border: 1px solid @border; padding: 4px; }
-    QMenu::item { padding: 7px 24px; border-radius: 4px; }
-    QMenu::item:selected, QMenuBar::item:selected { background: @muted; }
-    QMenu::separator { height: 1px; background: @border; margin: 4px 8px; }
-    QStatusBar { background: @surface; color: @secondary; border-top: 1px solid @border; padding: 3px 8px; }
-    QToolTip { color: @text; background: @surface; border: 1px solid @border; padding: 6px; }
-    QScrollArea { border: 0; background: transparent; }
-    QScrollBar:vertical { background: @background; width: 10px; margin: 0; }
-    QScrollBar::handle:vertical { background: @border; border-radius: 4px; min-height: 24px; }
-    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
-    QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
-    QSlider::groove:horizontal { height: 4px; background: @border; border-radius: 2px; }
-    QSlider::handle:horizontal { background: @text; width: 14px; margin: -5px 0; border-radius: 7px; }
-  )";
-  style.replace("@background", background).replace("@surface", surface)
-      .replace("@muted", muted).replace("@border", border)
-      .replace("@text", text).replace("@secondary", secondary);
-  qApp->setStyleSheet(style);
-}
+using feathercast::ui::applyTheme;
 static QLabel *label(const QString &text, const char *role) {
   auto *result = new QLabel(text);
   result->setProperty("role", role);
@@ -126,7 +45,6 @@ class Window : public QMainWindow {
   QProcess remuxProcess;
   QString remuxTemporary;
   bool refreshing = false, smoke = false;
-  QHash<QString, QPair<int, bool>> audio;
   QHash<QString, bool> visibility;
   void saveConfig() {
     engine.saveConfiguration(config);
@@ -137,12 +55,7 @@ class Window : public QMainWindow {
       s.setValue("visibility/" + QString::fromLatin1(it.key().toUtf8().toBase64(
                                      QByteArray::Base64UrlEncoding)),
                  it.value());
-    for (auto it = audio.cbegin(); it != audio.cend(); ++it) {
-      auto key = QString::fromLatin1(
-          it.key().toUtf8().toBase64(QByteArray::Base64UrlEncoding));
-      s.setValue("audio/" + key + "/volume", it.value().first);
-      s.setValue("audio/" + key + "/muted", it.value().second);
-    }
+
   }
   QDockWidget *dock(const QString &title, QWidget *widget,
                     Qt::DockWidgetArea area) {
@@ -283,33 +196,9 @@ class Window : public QMainWindow {
     d.exec();
   }
   void audioDialog() {
-    auto item = sources->currentItem();
-    if (!item)
-      return;
-    QString name = item->text();
-    auto state = audio.value(name, {100, false});
-    QDialog d(this);
-    d.setWindowTitle("Source audio — " + name);
-    QFormLayout form(&d);
-    QSlider volume(Qt::Horizontal);
-    volume.setRange(0, 200);
-    volume.setValue(state.first);
-    QCheckBox mute("Mute");
-    mute.setChecked(state.second);
-    form.addRow("Volume (%)", &volume);
-    form.addRow(&mute);
-    QLabel note("Live source peak levels are shown in the Audio meters dock.");
-    form.addRow(&note);
-    QDialogButtonBox box(QDialogButtonBox::Close);
-    form.addRow(&box);
-    auto apply = [&] {
-      audio[name] = {volume.value(), mute.isChecked()};
-      engine.setSourceAudio(name, volume.value() / 100.0, mute.isChecked());
-    };
-    connect(&volume, &QSlider::valueChanged, &d, apply);
-    connect(&mute, &QCheckBox::toggled, &d, apply);
-    connect(&box, &QDialogButtonBox::rejected, &d, &QDialog::reject);
-    d.exec();
+    std::unique_ptr<QDialog> dialog(feathercast::ui::createAdvancedAudioDialog(engine, this));
+    dialog->exec();
+    saveConfig();
   }
   void updateStats() {
     auto s = engine.statistics();
@@ -439,8 +328,19 @@ public:
       QTimer::singleShot(0, this, &QWidget::close);
       return;
     }
-    if (QFileInfo::exists(config))
-      engine.loadConfiguration(config);
+    QSettings ui(dir + "/ui.ini", QSettings::IniFormat);
+    if (QFileInfo::exists(config)) {
+      QJsonObject legacy;
+      ui.beginGroup("audio");
+      for (const auto& key : ui.childGroups()) {
+        const auto name = QString::fromUtf8(QByteArray::fromBase64(key.toLatin1(), QByteArray::Base64UrlEncoding));
+        const double gain = qBound(0, ui.value(key + "/volume", 100).toInt(), 200) / 100.0;
+        legacy[name] = QJsonObject{{"volume", gain}, {"muted", ui.value(key + "/muted", false).toBool()}};
+      }
+      ui.endGroup();
+      if (engine.loadConfiguration(config, legacy) && !legacy.isEmpty() && engine.saveConfiguration(config))
+        ui.remove("audio");
+    }
     if (engine.scenes().isEmpty()) {
       engine.addScene("Scene");
       engine.addSource("Scene", "color", "Background");
@@ -492,8 +392,8 @@ public:
         engine.removeSource(engine.currentScene(),
                             sources->currentItem()->text());
     });
-    auto *sourceAudio = button("Audio…", sol, [this] { audioDialog(); });
-    sourceAudio->setToolTip("Adjust volume and mute for the selected source");
+    auto *sourceAudio = button("Advanced Audio Properties…", sol, [this] { audioDialog(); });
+    sourceAudio->setToolTip("Adjust audio and track assignments for sources across all scenes");
     dock("Sources", sourceBox, Qt::LeftDockWidgetArea);
     connect(scenes, &QListWidget::currentTextChanged, this,
             [this](const QString &s) {
@@ -597,23 +497,11 @@ public:
     menuBar()->addAction("Global hotkeys…", this,
                         [this] { automationPanel->editHotkeys(this); });
     menuBar()->addAction("Settings…", this, [this] { settingsDialog(); });
-    QSettings ui(dir + "/ui.ini", QSettings::IniFormat);
+    view->addAction("Advanced Audio Properties…", this, [this] { audioDialog(); });
     ui.beginGroup("visibility");
     for (const auto &k : ui.childKeys())
       visibility[QString::fromUtf8(QByteArray::fromBase64(
           k.toLatin1(), QByteArray::Base64UrlEncoding))] = ui.value(k).toBool();
-    ui.endGroup();
-    ui.beginGroup("audio");
-    for (const auto &k : ui.childGroups()) {
-      ui.beginGroup(k);
-      auto name = QString::fromUtf8(
-          QByteArray::fromBase64(k.toLatin1(), QByteArray::Base64UrlEncoding));
-      audio[name] = {ui.value("volume", 100).toInt(),
-                     ui.value("muted", false).toBool()};
-      engine.setSourceAudio(name, audio[name].first / 100.0,
-                            audio[name].second);
-      ui.endGroup();
-    }
     ui.endGroup();
     refreshScenes();
     restoreGeometry(ui.value("geometry").toByteArray());
@@ -761,7 +649,7 @@ void Window::settingsDialog() {
   auto kf = number(out, "Keyframe interval (s)", "keyframeSeconds", 1, 10);
   auto au = page("Audio");
   au->addRow(
-      new QLabel("Select a source and use Audio to adjust its volume or mute. "
+      new QLabel("Open Advanced Audio Properties from Sources or the View menu to adjust gain, monitoring and tracks. "
                  "Live source peak levels appear in the Audio meters dock."));
   auto vid = page("Video");
   auto w = number(vid, "Width", "width", 320, 7680);

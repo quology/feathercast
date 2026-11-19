@@ -43,7 +43,7 @@ if(FEATHERCAST_BUILD_ENGINE OR FEATHERCAST_BUILD_APP)
     target_include_directories(feathercast_engine SYSTEM PRIVATE
         "${FEATHERCAST_OBS_SOURCE}/libobs" "${FEATHERCAST_OBS_SDK}/include" "${_ffmpeg_include}")
     target_link_libraries(feathercast_engine PUBLIC feathercast_core Qt6::Core PRIVATE
-        "${FC_obs_LIBRARY}" "${FC_avformat_LIBRARY}" "${FC_avcodec_LIBRARY}" "${FC_avutil_LIBRARY}" crypt32 psapi)
+        "${FC_obs_LIBRARY}" "${FC_avformat_LIBRARY}" "${FC_avcodec_LIBRARY}" "${FC_avutil_LIBRARY}" crypt32 psapi ole32)
     if(MINGW)
         target_compile_options(feathercast_engine PRIVATE -Wall -Wextra -Wpedantic)
     endif()
@@ -81,6 +81,11 @@ if(FEATHERCAST_BUILD_ENGINE OR FEATHERCAST_BUILD_APP)
         feathercast_runtime(FeatherCast)
         add_dependencies(FeatherCast feathercast_remux)
         if(BUILD_TESTING)
+            # Explicit desktop fixture, using the production dialog and theme.
+            add_executable(feathercast_advanced_audio_ui_smoke tests/advanced_audio_ui_smoke.cpp
+                src/ui/advanced_audio_dialog.cpp src/ui/theme.cpp)
+            target_link_libraries(feathercast_advanced_audio_ui_smoke PRIVATE feathercast_engine Qt6::Widgets)
+            feathercast_runtime(feathercast_advanced_audio_ui_smoke)
             add_executable(feathercast_automation_config_tests tests/automation_config_tests.cpp src/ui/automation_config.cpp)
             target_link_libraries(feathercast_automation_config_tests PRIVATE feathercast_core Qt6::Widgets)
             add_test(NAME feathercast_automation_config_tests COMMAND feathercast_automation_config_tests)

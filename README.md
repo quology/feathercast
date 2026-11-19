@@ -5,7 +5,7 @@ FeatherCast is a native Windows broadcasting application using C++20, Qt 6 and s
 ## Implemented features
 
 - Dockable scenes/sources, real capture/device options, volume/mute and actual libobs audio peak meters.
-- Optional application-only audio for display/window/game capture and up to five separate source audio tracks in MKV recordings.
+- Optional application-only audio for display/window/game capture. Advanced Audio Properties controls gain, mono, balance, sync, monitoring and six independent recording tracks.
 - Shared H.264/AAC encoders for independent streaming, MKV recording and replay; simultaneous outputs tested separately with x264 and RTX 4070 NVENC.
 - Live 0–300 second packet delay with bounded memory and keyframe cuts. Increasing delay holds output and can time out ingest; decreasing it intentionally removes content. Effective delay is approximate.
 - Visual priority automation with OR-of-AND conditions, ordered actions, debounce, cooldown, manual override, fallback and transactional JSON import/export. Process snapshots poll every 500 ms.
@@ -22,6 +22,6 @@ Extract the entire portable ZIP and run `FeatherCast.exe`; keep runtime/data dir
 
 ## Limits and license
 
-Outputs share resolution and video quality. Streaming/replay use one stereo AAC mix; recordings can also include up to five isolated source tracks. Application audio captures the app, not an individual tab, and actual Windows application isolation remains unverified. Recording splitting, live disk-pressure protection, disk-backed delay, broad plugin extension types and plugin isolation are absent. External platforms, visual capture/preview, protected games, AMF/QSV hardware and comparable gaming performance remain unverified. CPU/GPU utilization is unavailable.
+Outputs share resolution and video quality. Streaming and replay use stereo AAC track 1. MKV recordings support six assignable stereo AAC tracks. Application audio captures the app, not an individual tab, and actual Windows application isolation remains unverified. Recording splitting, live disk-pressure protection, disk-backed delay, broad plugin extension types and plugin isolation are absent. External platforms, visual capture/preview, protected games, AMF/QSV hardware and comparable gaming performance remain unverified. CPU/GPU utilization is unavailable.
 
 FeatherCast is GPL-3.0-or-later. OBS, Qt, FFmpeg and other dependencies retain their licenses; preserve supplied notices and source URLs. A complete public redistribution/license/corresponding-source audit remains pending. Source is in private `quology/feathercast`; no public stable redistribution is claimed.
