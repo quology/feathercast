@@ -18,11 +18,13 @@
 #include <QThread>
 #include <QUrl>
 #include <windows.h>
+#include <objbase.h>
 #include <tlhelp32.h>
 #include <psapi.h>
 #include <wincrypt.h>
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -49,11 +51,81 @@ bool hasSourceAudio(const QString& type, const QJsonObject& properties) {
     return type == "microphone" || type == "desktop_audio" || type == "application_audio" || type == "test_tone" ||
         ((type == "window" || type == "game" || type == "desktop") && properties.value("capture_audio").toBool());
 }
+QJsonObject defaultAudio() {
+    return {{"volume", 1.0}, {"muted", false}, {"mono", false}, {"balance", 0.5},
+            {"sync_offset_ms", 0}, {"monitoring", "off"}, {"tracks", 1}};
+}
+QString audioPatchError(const QJsonObject& patch) {
+    const auto defaults = defaultAudio();
+    for (auto it = patch.begin(); it != patch.end(); ++it) {
+        const auto key = it.key();
+        const auto v = it.value();
+        bool valid = false;
+        if (key == "volume" || key == "balance")
+            valid = v.isDouble() && v.toDouble() >= 0 && v.toDouble() <= (key == "volume" ? 2.0 : 1.0);
+        else if (key == "tracks" || key == "sync_offset_ms") {
+            const int n = v.toInt();
+            valid = v.isDouble() && v.toDouble() == n &&
+                    (key == "tracks" ? n >= 0 && n <= 63 : n >= -950 && n <= 20000);
+        } else if (key == "monitoring")
+            valid = v == "off" || v == "monitor_only" || v == "monitor_and_output";
+        else if (defaults.value(key).isBool()) valid = v.isBool();
+        if (!valid) return "Invalid audio property: " + key;
+    }
+    return {};
+}
+int trackMask(const QJsonObject& source) {
+    return source["properties"].toObject()["audio"].toObject()["tracks"].toInt();
+}
+// Reserve a free mixer only for the legacy isolated-track shortcut. Manual
+// assignments explicitly select any combination of the six shared mixers.
+QString normalizeAudio(const QString& type, QJsonObject& properties, int used,
+                       const QJsonObject& legacyGain = {}) {
+    if (!hasSourceAudio(type, properties)) return {};
+    auto patch = properties.value("audio").toObject();
+    if (!properties.contains("audio")) patch = legacyGain;
+    auto audio = defaultAudio();
+    if (!patch.contains("tracks") && properties.value("separate_audio_track").toBool()) {
+        int track = properties.value("recording_track").toInt();
+        if (track && (used & (1 << (track - 1)))) return "Separate recording track is already in use";
+        if (!track) {
+            for (int i = 2; i <= 6; ++i) if (!(used & (1 << (i - 1)))) { track = i; break; }
+        }
+        if (!track) return "No free track for isolated recording audio";
+        audio["tracks"] = 1 | (1 << (track - 1));
+    }
+    for (auto it = patch.begin(); it != patch.end(); ++it) audio[it.key()] = it.value();
+    if (const auto error = audioPatchError(audio); !error.isEmpty()) return error;
+    properties.remove("separate_audio_track");
+    properties.remove("recording_track");
+    properties["audio"] = audio;
+    return {};
+}
+void applyAudio(obs_source_t* source, const QJsonObject& audio, const QJsonObject& before = {}) {
+    const auto changed = [&](const char* key) { return audio[key] != before[key]; };
+    // Mute/gain and the effective routing mask must be in place before the
+    // source starts monitoring or becomes active through its first scene item.
+    if (changed("muted")) obs_source_set_muted(source, audio["muted"].toBool());
+    if (changed("volume")) obs_source_set_volume(source, float(audio["volume"].toDouble()));
+    if (changed("mono")) {
+        const auto flags = obs_source_get_flags(source);
+        obs_source_set_flags(source, audio["mono"].toBool() ? flags | OBS_SOURCE_FLAG_FORCE_MONO : flags & ~OBS_SOURCE_FLAG_FORCE_MONO);
+    }
+    if (changed("balance")) obs_source_set_balance_value(source, float(audio["balance"].toDouble()));
+    if (changed("sync_offset_ms")) obs_source_set_sync_offset(source, qint64(audio["sync_offset_ms"].toInt()) * 1000000);
+    if (changed("tracks") || changed("monitoring"))
+        obs_source_set_audio_mixers(source, audio["monitoring"] == "monitor_only" ? 0 : audio["tracks"].toInt());
+    if (changed("monitoring")) obs_source_set_monitoring_enabled(source, audio["monitoring"] != "off");
+}
 bool validWindowTarget(const QString& target) {
     const auto parts = target.split(':');
     return parts.size() == 3 && !parts[1].isEmpty() && !parts[2].isEmpty();
 }
 QString audioSettingsError(const QString& type, const QJsonObject& properties) {
+    if (properties.contains("audio")) {
+        if (!hasSourceAudio(type, properties) || !properties["audio"].isObject()) return "Expected audio properties on an audio-capable source";
+        if (const auto error = audioPatchError(properties["audio"].toObject()); !error.isEmpty()) return error;
+    }
     for (const auto* key : {"capture_audio", "separate_audio_track"})
         if (properties.contains(key) && !properties[key].isBool()) return "Audio capture and separate track options must be Boolean";
     if (properties.value("capture_audio").toBool()) {
@@ -166,6 +238,8 @@ struct Engine::Impl {
     struct Scene { obs_scene_t* scene{}; QJsonArray sources; };
     QMap<QString, Scene> scenes;
     std::map<QString, std::unique_ptr<AudioMeter>> meters;
+    QMap<QString, obs_source_t*> audioOwners; // Borrowed from the owning scene items.
+    bool monitoringConfigured{};
     // Borrowed scene items; the owning scene keeps each private companion alive.
     QMap<QString, obs_sceneitem_t*> audioCompanions;
     QString selected;
@@ -236,9 +310,10 @@ struct Engine::Impl {
         for (auto* encoder : recordingAudio) obs_encoder_release(encoder);
         recordingAudio.clear();
     }
-    bool sceneHasRecordingTracks(const Scene& scene) const {
-        for (auto value : scene.sources) if (value.toObject()["properties"].toObject()["separate_audio_track"].toBool()) return true;
-        return false;
+    int usedTracks() const {
+        int mask = 0;
+        for (const auto& scene : scenes) for (auto value : scene.sources) mask |= trackMask(value.toObject());
+        return mask;
     }
     bool configureVideo() {
         obs_video_info vi{};
@@ -343,6 +418,7 @@ bool Engine::initialize(QString runtimeRoot, QJsonObject settings) {
     obs_add_data_path((d->runtime + "/data/libobs/").toUtf8().constData());
     obs_audio_info ai{48000, SPEAKERS_STEREO};
     if (!obs_reset_audio(&ai) || !d->configureVideo()) { shutdown(); return false; }
+    d->monitoringConfigured = obs_audio_monitoring_available() && obs_set_audio_monitoring_device("Default", "default");
     const QStringList modules{"image-source", "obs-x264", "obs-ffmpeg", "obs-nvenc", "obs-qsv11", "win-capture", "win-wasapi", "obs-transitions", "obs-filters"};
     for (const auto& name : modules) {
         const auto directory = d->runtime + "/core/" + name;
@@ -366,6 +442,7 @@ void Engine::shutdown() {
     if (!d->ready) return;
     d->detachPreview(); d->releaseEncoders();
     d->meters.clear();
+    d->audioOwners.clear();
     d->audioCompanions.clear();
     obs_set_output_source(0, nullptr);
     for (const auto& scene : d->scenes) {
@@ -427,7 +504,7 @@ bool Engine::saveConfiguration(const QString& path) const {
     QSaveFile file(path); if (!file.open(QIODevice::WriteOnly)) return false;
     const auto bytes = QJsonDocument(object).toJson(); return file.write(bytes) == bytes.size() && file.commit();
 }
-bool Engine::loadConfiguration(const QString& path) {
+bool Engine::loadConfiguration(const QString& path, const QJsonObject& legacySourceAudio) {
     QFile file(path); if (!file.open(QIODevice::ReadOnly) || file.size() > 4 * 1024 * 1024) return false;
     QJsonParseError error; const auto doc = QJsonDocument::fromJson(file.readAll(), &error);
     if (error.error != QJsonParseError::NoError || !doc.isObject() || doc["version"].toInt() != 1) return d->fail("Invalid configuration file");
@@ -436,8 +513,7 @@ bool Engine::loadConfiguration(const QString& path) {
     auto savedScenes = doc["scenes"].toArray();
     if (savedScenes.size() > 128) return d->fail("Too many saved scenes");
     QSet<QString> sceneNames, sourceNames;
-    QSet<int> recordingTracks;
-    int separateTrackCount = 0;
+    int usedTracks = 0;
     for (auto value : savedScenes) {
         auto scene = value.toObject(); auto name = scene["name"].toString();
         if (!value.isObject() || name.trimmed().isEmpty() || name.size() > 128 || sceneNames.contains(name) || !scene["sources"].isArray() || scene["sources"].toArray().size() > 64) return d->fail("Invalid saved scene");
@@ -452,35 +528,35 @@ bool Engine::loadConfiguration(const QString& path) {
             if (!audioError.isEmpty()) return d->fail(audioError);
             if (d->ready && (properties.value("capture_audio").toBool() || type == "application_audio") && !sourceAudioAvailable(type))
                 return d->fail("Application audio capture is unavailable in this runtime");
-            if (properties.value("separate_audio_track").toBool()) {
-                if (++separateTrackCount > 5) return d->fail("At most five separate recording tracks are supported");
-                if (properties.contains("recording_track")) {
-                    const int track = properties.value("recording_track").toInt();
-                    if (recordingTracks.contains(track)) return d->fail("Separate recording tracks must be unique");
-                    recordingTracks.insert(track);
-                }
-            }
+            // First reserve every explicit manual mask, regardless of file order.
+            usedTracks |= properties["audio"].toObject()["tracks"].toInt();
         }
     }
     for (const auto& name : sceneNames) if (sourceNames.contains(name)) return d->fail("Source and scene names must be unique");
     if (!sceneNames.isEmpty() && !sceneNames.contains(doc["selectedScene"].toString())) return d->fail("Invalid selected scene");
-    // Reserve explicit assignments first so older/manual files can omit track numbers.
-    for (qsizetype i = 0; i < savedScenes.size(); ++i) {
-        auto scene = savedScenes[i].toObject(); auto sources = scene["sources"].toArray();
-        for (qsizetype j = 0; j < sources.size(); ++j) {
-            auto source = sources[j].toObject(); auto properties = source["properties"].toObject();
-            if (!properties.value("separate_audio_track").toBool() || properties.contains("recording_track")) continue;
-            for (int track = 2; track <= 6; ++track) if (!recordingTracks.contains(track)) {
-                properties["recording_track"] = track; recordingTracks.insert(track); break;
+    // Reserve explicit legacy track numbers before allocating unnumbered shortcuts.
+    // Normalize everything before changing settings or replacing the scene graph.
+    for (bool explicitTrack : {true, false}) {
+        for (qsizetype i = 0; i < savedScenes.size(); ++i) {
+            auto scene = savedScenes[i].toObject(); auto sources = scene["sources"].toArray();
+            for (qsizetype j = 0; j < sources.size(); ++j) {
+                auto source = sources[j].toObject(); auto properties = source["properties"].toObject();
+                if (properties.contains("recording_track") != explicitTrack) continue;
+                const auto error = normalizeAudio(source["type"].toString(), properties, usedTracks,
+                                                  legacySourceAudio[source["name"].toString()].toObject());
+                if (!error.isEmpty()) return d->fail(error);
+                source["properties"] = properties;
+                usedTracks |= trackMask(source);
+                sources[j] = source;
             }
-            source["properties"] = properties; sources[j] = source;
+            scene["sources"] = sources; savedScenes[i] = scene;
         }
-        scene["sources"] = sources; savedScenes[i] = scene;
     }
     if (!applySettings(doc["settings"].toObject())) return false;
     if (!d->ready) return true;
     obs_set_output_source(0, nullptr);
     d->meters.clear();
+    d->audioOwners.clear();
     d->audioCompanions.clear();
     for (const auto& scene : d->scenes) { obs_source_remove(obs_scene_get_source(scene.scene)); obs_scene_release(scene.scene); }
     d->scenes.clear(); d->selected.clear();
@@ -507,11 +583,12 @@ bool Engine::addScene(const QString& name) {
 }
 bool Engine::removeScene(const QString& name) {
     auto it = d->scenes.find(name); if (it == d->scenes.end()) return false;
-    if (active(d->recording) && d->sceneHasRecordingTracks(*it)) return d->fail("Stop recording before removing a scene with separate audio tracks");
+    if (active(d->recording)) for (auto value : it->sources)
+        if (trackMask(value.toObject()) & ~1) return d->fail("Stop recording before removing a scene assigned to additional tracks");
     if (d->selected == name) { obs_set_output_source(0, nullptr); d->selected.clear(); }
     for (auto source : it->sources) {
         const auto sourceName = source.toObject()["name"].toString();
-        d->meters.erase(sourceName); d->audioCompanions.remove(sourceName);
+        d->meters.erase(sourceName); d->audioOwners.remove(sourceName); d->audioCompanions.remove(sourceName);
     }
     obs_source_remove(obs_scene_get_source(it->scene)); obs_scene_release(it->scene); d->scenes.erase(it);
     if (d->selected.isEmpty() && !d->scenes.isEmpty()) selectScene(d->scenes.firstKey());
@@ -530,19 +607,9 @@ bool Engine::addSource(const QString& scene, const QString& type, const QString&
     if (!audioError.isEmpty()) return d->fail(audioError);
     if ((properties.value("capture_audio").toBool() || type == "application_audio") && !sourceAudioAvailable(type))
         return d->fail("Application audio capture is unavailable in this runtime");
-    if (properties.value("separate_audio_track").toBool()) {
-        if (active(d->recording)) return d->fail("Stop recording before adding a separate audio track");
-        QSet<int> used;
-        for (const auto& savedScene : d->scenes) for (auto value : savedScene.sources) {
-            const auto p = value.toObject()["properties"].toObject();
-            if (p["separate_audio_track"].toBool()) used.insert(p["recording_track"].toInt());
-        }
-        int track = properties.value("recording_track").toInt();
-        if (track && used.contains(track)) return d->fail("Separate recording track is already in use");
-        if (!track) for (int candidate = 2; candidate <= 6; ++candidate) if (!used.contains(candidate)) { track = candidate; break; }
-        if (!track) return d->fail("At most five separate recording tracks are supported");
-        properties["recording_track"] = track;
-    }
+    if (const auto error = normalizeAudio(type, properties, d->usedTracks()); !error.isEmpty()) return d->fail(error);
+    const auto audio = properties.value("audio").toObject();
+    if (active(d->recording) && (audio["tracks"].toInt() & ~1)) return d->fail("Stop recording before adding a source assigned to additional tracks");
     if (type == "color") {
         if (!properties.contains("color")) properties["color"] = static_cast<double>(0xff7333eeu);
         properties["width"] = d->config["width"]; properties["height"] = d->config["height"];
@@ -550,14 +617,13 @@ bool Engine::addSource(const QString& scene, const QString& type, const QString&
     if (type == "desktop" && !properties.contains("monitor")) properties["monitor"] = 0;
     if (type == "game" && !properties.contains("capture_mode")) properties["capture_mode"] = "any";
     if ((type == "microphone" || type == "desktop_audio") && !properties.contains("device_id")) properties["device_id"] = "default";
-    auto* settings = obsSettings(properties);
+    auto captureProperties = properties; captureProperties.remove("audio");
+    auto* settings = obsSettings(captureProperties);
     auto* source = obs_source_create(id, name.toUtf8().constData(), settings, nullptr); obs_data_release(settings);
     if (!source) return d->fail("Capture/source module could not create " + name);
-    const auto track = properties.value("recording_track").toInt();
-    const auto mixers = 1u | (track ? 1u << (track - 1) : 0u);
-    // Apply routing before scene activation: a newly added source must never
-    // briefly leak through libobs's default all-mixer mask during recording.
-    if (obs_source_get_output_flags(source) & OBS_SOURCE_AUDIO) obs_source_set_audio_mixers(source, mixers);
+    const bool useCompanion = type == "desktop" && properties.value("capture_audio").toBool();
+    if (!audio.isEmpty() && !useCompanion) applyAudio(source, audio);
+    else if (obs_source_get_output_flags(source) & OBS_SOURCE_AUDIO) obs_source_set_audio_mixers(source, 0);
     auto* item = obs_scene_add(found->scene, source);
     if (!item) { obs_source_release(source); return d->fail("Could not attach source"); }
     if (obs_source_get_output_flags(source) & OBS_SOURCE_VIDEO) {
@@ -565,11 +631,11 @@ bool Engine::addSource(const QString& scene, const QString& type, const QString&
         obs_sceneitem_set_bounds_type(item, OBS_BOUNDS_SCALE_INNER); obs_sceneitem_set_bounds(item, &bounds);
     }
     obs_source_t* audioSource = source;
-    if (type == "desktop" && properties.value("capture_audio").toBool()) {
+    if (useCompanion) {
         auto* audioSettings = obsSettings({{"window", properties.value("audio_window")}, {"priority", 1}});
         auto* companion = obs_source_create_private(sourceId("application_audio"), (name + " audio").toUtf8().constData(), audioSettings);
         obs_data_release(audioSettings);
-        if (companion) obs_source_set_audio_mixers(companion, mixers);
+        if (companion) applyAudio(companion, audio);
         auto* audioItem = companion ? obs_scene_add(found->scene, companion) : nullptr;
         if (!audioItem) {
             if (companion) obs_source_release(companion);
@@ -579,8 +645,9 @@ bool Engine::addSource(const QString& scene, const QString& type, const QString&
         d->audioCompanions.insert(name, audioItem);
         audioSource = companion;
     }
-    if ((obs_source_get_output_flags(audioSource) & OBS_SOURCE_AUDIO) || hasSourceAudio(type, properties)) {
-        if (hasSourceAudio(type, properties)) d->meters[name] = std::make_unique<AudioMeter>(audioSource);
+    if (!audio.isEmpty()) {
+        d->audioOwners.insert(name, audioSource);
+        d->meters[name] = std::make_unique<AudioMeter>(audioSource);
     }
     if (audioSource != source) obs_source_release(audioSource);
     obs_source_release(source);
@@ -592,10 +659,11 @@ bool Engine::removeSource(const QString& scene, const QString& name) {
     auto* item = publicSceneItem(found->scene, name); if (!item) return false;
     for (auto value : found->sources) {
         const auto s = value.toObject();
-        if (s["name"].toString() == name && s["properties"].toObject()["separate_audio_track"].toBool() && active(d->recording))
+        if (s["name"].toString() == name && (trackMask(s) & ~1) && active(d->recording))
             return d->fail("Stop recording before removing a separate audio track");
     }
     d->meters.erase(name);
+    d->audioOwners.remove(name);
     if (auto* companion = d->audioCompanions.take(name)) obs_sceneitem_remove(companion);
     obs_sceneitem_remove(item);
     for (qsizetype i = 0; i < found->sources.size(); ++i) if (found->sources[i].toObject()["name"].toString() == name) { found->sources.removeAt(i); break; }
@@ -638,10 +706,60 @@ void Engine::setSourceVisible(const QString& scene, const QString& name, bool vi
         if (auto* companion = d->audioCompanions.value(name)) obs_sceneitem_set_visible(companion, visible);
     }
 }
+QJsonArray Engine::audioSources() const {
+    QJsonArray rows;
+    for (auto it = d->scenes.cbegin(); it != d->scenes.cend(); ++it) for (auto value : it->sources) {
+        const auto entry = value.toObject(); const auto name = entry["name"].toString();
+        if (auto* source = d->audioOwners.value(name)) {
+            rows.append(QJsonObject{{"name", name}, {"scene", it.key()}, {"properties", entry["properties"].toObject()["audio"]},
+                                    {"active", obs_source_active(source) && obs_source_audio_active(source)}});
+        }
+    }
+    return rows;
+}
+QJsonObject Engine::audioProperties(const QString& name) const {
+    for (const auto& scene : d->scenes) for (auto value : scene.sources) {
+        const auto entry = value.toObject();
+        if (entry["name"] == name) return entry["properties"].toObject()["audio"].toObject();
+    }
+    return {};
+}
+bool Engine::setAudioProperties(const QString& name, const QJsonObject& patch) {
+    auto* source = d->audioOwners.value(name);
+    if (!source) return d->fail("Audio source is unavailable: " + name);
+    if (const auto error = audioPatchError(patch); !error.isEmpty()) return d->fail(error);
+    for (auto& scene : d->scenes) for (qsizetype i = 0; i < scene.sources.size(); ++i) {
+        auto entry = scene.sources[i].toObject();
+        if (entry["name"] != name) continue;
+        auto properties = entry["properties"].toObject(); const auto before = properties["audio"].toObject();
+        auto audio = before;
+        for (auto it = patch.begin(); it != patch.end(); ++it) audio[it.key()] = it.value();
+        if (before == audio) return true;
+        if (before["tracks"] != audio["tracks"] && recordingActive()) return d->fail("Stop recording before changing track assignments");
+        if (before["monitoring"] != audio["monitoring"] && audio["monitoring"] != "off" && !audioMonitoringAvailable())
+            return d->fail("Audio monitoring requires a Windows playback device");
+        applyAudio(source, audio, before);
+        properties["audio"] = audio; entry["properties"] = properties; scene.sources[i] = entry;
+        return true;
+    }
+    return false;
+}
+bool Engine::audioMonitoringAvailable() const {
+    if (!d->ready || !d->monitoringConfigured) return false;
+    bool found = false;
+    // The libobs Windows enumerator uses COM on the calling thread, which can
+    // also be a QCoreApplication thread in clients without a Qt GUI.
+    const auto hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    obs_enum_audio_monitoring_devices([](void* data, const char*, const char*) {
+        *static_cast<bool*>(data) = true; return false;
+    }, &found);
+    if (SUCCEEDED(hr)) CoUninitialize();
+    return found;
+}
+bool Engine::recordingActive() const { return active(d->recording); }
 void Engine::setSourceAudio(const QString& name, double volume, bool muted) {
-    auto* companion = d->audioCompanions.value(name);
-    auto* source = companion ? obs_source_get_ref(obs_sceneitem_get_source(companion)) : obs_get_source_by_name(name.toUtf8().constData()); if (!source) return;
-    obs_source_set_volume(source, static_cast<float>(std::clamp(volume, 0.0, 2.0))); obs_source_set_muted(source, muted); obs_source_release(source);
+    if (d->audioOwners.contains(name))
+        setAudioProperties(name, {{"volume", std::clamp(volume, 0.0, 2.0)}, {"muted", muted}});
 }
 void Engine::attachPreview(quintptr nativeWindow, int width, int height) {
     d->detachPreview(); if (!d->ready || !nativeWindow) return;
@@ -691,18 +809,12 @@ bool Engine::startRecording(QString filePath) {
     d->attachEncoders(d->recording); d->connectOutput(d->recording);
     // The shared mix remains output track 1. Dedicated encoders are connected
     // only to recording, so streaming and replay keep their existing mix.
-    QMap<int, QString> recordingTracks;
-    for (const auto& scene : d->scenes) for (auto value : scene.sources) {
-        const auto source = value.toObject(); const auto properties = source["properties"].toObject();
-        if (properties.value("separate_audio_track").toBool()) recordingTracks[properties.value("recording_track").toInt()] = source["name"].toString();
-    }
-    // Encode silent gaps too: persisted track numbers must match MKV track
-    // positions even when an earlier source has been removed.
-    const int lastTrack = recordingTracks.isEmpty() ? 1 : recordingTracks.lastKey();
+    // Fill gaps to keep saved track numbers stable in the container.
+    const auto lastTrack = std::bit_width(static_cast<unsigned>(d->usedTracks() | 1));
     for (int track = 2; track <= lastTrack; ++track) {
         auto* audioSettings = obs_data_create();
         obs_data_set_int(audioSettings, "bitrate", d->config["audioBitrateKbps"].toInt());
-        const auto label = recordingTracks.value(track, QString("Unused track %1").arg(track));
+        const auto label = QString("Recording track %1").arg(track);
         auto* encoder = obs_audio_encoder_create("ffmpeg_aac", label.toUtf8().constData(), audioSettings, track - 1, nullptr);
         obs_data_release(audioSettings);
         if (!encoder) {

@@ -1,5 +1,15 @@
 # Verified test results
 
+## Full Advanced Audio Properties — 19 November 2026
+
+- Full Release build in `build/AdvancedAudio` passed; CTest 3/3 passed. Existing application instances were left running in their original directories.
+- Independent `feathercast_source_audio_smoke` and `feathercast_advanced_audio_ui_smoke` runs both exited 0. Native checks cover atomic validation, volume/mute, mono, balance, signed sync-offset conversion, empty/shared track masks, monitor-only suppression and restoration, recording routing guards, companion ownership, canonical persistence and legacy migration. Monitoring capability checks ran without a SKIP on this machine, using muted synthetic sources.
+- The production dialog fixture exercised all eight columns, dB/percent conversion without gain changes, zero-gain display, mute/mono/balance/sync/monitoring controls, each track checkbox, active/inactive filtering, editor focus retention during polling, recording locks and Close. Its dark-theme screenshot was reviewed: all columns and six checkboxes per source fit at host scaling.
+- Main application integrated UI self-test passed all 12 Boolean checks in both dark and light themes, with clean timed exits.
+- Six native fixture media files passed every-track decode, strictly increasing per-stream DTS, first video keyframe and all-track A/V end-skew checks. Independent decoded PCM checks confirmed 440 Hz only on track 1, 880 Hz only on track 2, and both on shared track 3. Unwanted tone suppression exceeded 140 dB in this synthetic fixture (40 dB required). The retained mixed/isolated fixture also passed. The standard-library validator now reproduces the three-track check with `--routing`.
+- An isolated application startup separately verified `ui.ini` migration: legacy gain/mute and isolated assignment were imported, existing canonical JSON took precedence over conflicting INI values, and the stale audio INI group was removed only after a successful save.
+- Acoustic playback was not listened to, and real Windows application sound isolation remains unverified. Native capture ownership uses nonexistent targets; recordings use explicit synthetic tones rather than the user's application audio. These checks do not establish live-platform or hardware-encoder behavior.
+
 ## Application audio and isolated recording tracks — 19 November 2026
 
 - Full Release build in `build/SourceAudio` passed with pinned Qt 6.8.3/MinGW 13.1; the existing `build/Release` executable was in use and was not replaced. Existing `obs_add_data_path` deprecation warning remains.
