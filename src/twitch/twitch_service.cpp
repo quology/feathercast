@@ -17,6 +17,30 @@
 
 namespace feathercast::twitch {
 QStringList requiredScopes() { return {"channel:manage:broadcast", "user:read:chat", "user:write:chat"}; }
+QStringList authorizationScopes() {
+  auto scopes = requiredScopes();
+  scopes.append({"moderator:read:followers", "channel:read:subscriptions", "bits:read"});
+  return scopes;
+}
+namespace {
+QString activityScope(const QString &type) {
+  if (type == "channel.follow") return "moderator:read:followers";
+  if (type == "channel.cheer") return "bits:read";
+  if (type.startsWith("channel.subscri")) return "channel:read:subscriptions";
+  return {};
+}
+QStringList activityTypes() {
+  return {"channel.follow", "channel.subscribe", "channel.subscription.message",
+          "channel.subscription.gift", "channel.cheer", "channel.raid"};
+}
+}
+bool TwitchService::activityAuthorized() const {
+  for (const auto &type : activityTypes()) {
+    const auto scope = activityScope(type);
+    if (!scope.isEmpty() && !scopes_.contains(scope)) return false;
+  }
+  return online_;
+}
 bool validMetadata(const QString &title, const QStringList &tags) {
   if (title.trimmed().isEmpty() || title.toUcs4().size() > 140 || tags.size() > 10) return false;
   QSet<QString> unique;
@@ -70,7 +94,10 @@ TwitchService::TwitchService(QString directory, QObject *parent, Endpoints endpo
   });
   connect(&reconnectTimer_, &QTimer::timeout, this, [this] { openSocket(endpoints_.events); });
 }
-TwitchService::~TwitchService() { endSession(false); }
+TwitchService::~TwitchService() {
+  disconnect(this, nullptr, nullptr, nullptr);
+  endSession(false);
+}
 void TwitchService::raw(const QByteArray &method, const QUrl &url, const QByteArray &body,
                         const QByteArray &type, bool auth, Callback done) {
   if (replies_.size() >= 32) { done(0, {}); return; }
@@ -126,7 +153,7 @@ void TwitchService::oauth(const QString &endpoint, const QMap<QString, QString> 
       "application/x-www-form-urlencoded", false, std::move(done));
 }
 void TwitchService::endSession(bool erase) {
-  ++generation_; online_ = false; refreshing_ = false; validating_ = false; devicePending_ = false;
+  ++generation_; ++eventGeneration_; online_ = false; refreshing_ = false; validating_ = false; devicePending_ = false;
   for (auto *timer : {&deviceTimer_, &validateTimer_, &statusTimer_, &watchdog_, &reconnectTimer_}) timer->stop();
   for (auto *socket : {socket_.data(), replacement_.data()}) if (socket) {
     socket->disconnect(this); socket->abort(); socket->deleteLater();
@@ -136,13 +163,16 @@ void TwitchService::endSession(bool erase) {
   for (auto *reply : replies) reply->abort();
   refreshQueue_.clear(); blockedUntil_.clear(); seenEvents_.clear(); eventIds_.clear();
   access_.clear(); refresh_.clear(); user_.clear(); login_.clear(); device_.clear();
+  scopes_.clear(); activitySubscriptions_.clear(); eventSession_.clear();
   if (erase && sessionLock_.isLocked() && QFile::exists(path_) && !QFile::remove(path_))
     emit statusMessage("Could not remove saved Twitch credentials. Remove twitch.tokens from your profile before restarting.");
   sessionLock_.unlock();
   emit connectionChanged(false, {});
   emit chatStateChanged("Chat disconnected");
+  emit activityStateChanged("Activity feed disconnected");
 }
 void TwitchService::disconnectAccount() {
+  upgradingUser_.clear();
   endSession(true);
   emit statusMessage(QFile::exists(path_) ? "Twitch disconnected locally. Saved credentials could not be removed; delete twitch.tokens before restarting." : "Twitch disconnected locally. Saved tokens removed.");
 }
@@ -155,8 +185,9 @@ bool TwitchService::saveTokens() {
 }
 bool TwitchService::acceptTokens(const QJsonObject &object) {
   auto access = object["access_token"].toString(), refresh = object["refresh_token"].toString();
-  if (access.isEmpty() || refresh.isEmpty()) { endSession(true); emit statusMessage("Twitch returned incomplete credentials. Connect again."); return false; }
+  if (access.isEmpty() || refresh.isEmpty()) { if (restorePreviousAuthorization()) return false; endSession(true); emit statusMessage("Twitch returned incomplete credentials. Connect again."); return false; }
   access_ = access; refresh_ = refresh;
+  if (!upgradingUser_.isEmpty()) return true;
   if (!saveTokens()) { endSession(true); emit statusMessage("Windows could not save encrypted Twitch credentials. Connect again."); return false; }
   return true;
 }
@@ -174,18 +205,42 @@ void TwitchService::restore() {
   emit statusMessage("Validating saved Twitch account…"); validate();
 }
 void TwitchService::connectAccount(const QString &id) {
+  upgradingUser_.clear();
+  beginAuthorization(id);
+}
+void TwitchService::authorizeActivity() {
+  if (!online_) return;
+  if (authRetryAfter_ > QDateTime::currentSecsSinceEpoch()) {
+    emit statusMessage("Twitch authentication rate limit reached. Wait before authorizing the activity feed.");
+    return;
+  }
+  upgradingUser_ = user_;
+  const auto id = client_;
+  beginAuthorization(id);
+}
+bool TwitchService::restorePreviousAuthorization() {
+  if (upgradingUser_.isEmpty()) return false;
+  upgradingUser_.clear();
+  endSession(false);
+  emit deviceAuthorization({}, {});
+  emit statusMessage("Activity authorization did not complete. Restoring your previous Twitch connection.");
+  QTimer::singleShot(0, this, &TwitchService::restore);
+  return true;
+}
+void TwitchService::beginAuthorization(const QString &id) {
   if (authRetryAfter_ > QDateTime::currentSecsSinceEpoch()) { emit statusMessage("Twitch authentication rate limit reached. Wait before connecting again."); return; }
-  endSession(true);
+  endSession(false);
   QDir().mkpath(QFileInfo(path_).absolutePath());
   if (!sessionLock_.tryLock(0)) { emit statusMessage("Another VELA instance is using this Twitch profile. Close it before connecting."); return; }
   client_ = id.trimmed();
   if (!QRegularExpression("^[A-Za-z0-9]{5,128}$").match(client_).hasMatch()) { sessionLock_.unlock(); emit statusMessage("Enter a valid public Twitch Client ID."); return; }
   devicePending_ = true;
   emit statusMessage("Requesting Twitch authorization…");
-  oauth("device", {{"client_id", client_}, {"scopes", requiredScopes().join(' ')}}, [this](int status, QJsonObject data) {
+  oauth("device", {{"client_id", client_}, {"scopes", authorizationScopes().join(' ')}}, [this](int status, QJsonObject data) {
     const QUrl url(data["verification_uri"].toString());
     if (status != 200 || data["device_code"].toString().isEmpty() || data["user_code"].toString().isEmpty() ||
         url.scheme() != "https" || url.host() != "www.twitch.tv" || !url.userInfo().isEmpty() || data["expires_in"].toInt() <= 0) {
+      if (restorePreviousAuthorization()) return;
       devicePending_ = false; sessionLock_.unlock(); emit deviceAuthorization({}, {}); emit statusMessage("Twitch authorization could not start. Check your public Client ID and network, then try again."); return;
     }
     device_ = data["device_code"].toString();
@@ -197,13 +252,14 @@ void TwitchService::connectAccount(const QString &id) {
 }
 void TwitchService::pollDevice() {
   if (!devicePending_) return;
-  if (QDateTime::currentDateTimeUtc() >= deviceExpiry_) { devicePending_ = false; device_.clear(); sessionLock_.unlock(); emit deviceAuthorization({}, {}); emit statusMessage("Twitch authorization expired. Connect again."); return; }
-  oauth("token", {{"client_id", client_}, {"device_code", device_}, {"scopes", requiredScopes().join(' ')},
+  if (QDateTime::currentDateTimeUtc() >= deviceExpiry_) { if (restorePreviousAuthorization()) return; devicePending_ = false; device_.clear(); sessionLock_.unlock(); emit deviceAuthorization({}, {}); emit statusMessage("Twitch authorization expired. Connect again."); return; }
+  oauth("token", {{"client_id", client_}, {"device_code", device_}, {"scopes", authorizationScopes().join(' ')},
       {"grant_type", "urn:ietf:params:oauth:grant-type:device_code"}}, [this](int status, QJsonObject data) {
     if (status == 200) { devicePending_ = false; device_.clear(); if (acceptTokens(data)) validate(); return; }
     const auto error = data["error"].toString(data["message"].toString());
     if (error == "slow_down" || status == 429) deviceInterval_ = std::min(deviceInterval_ + 5000, 60000);
     else if (status != 0 && status < 500 && error != "authorization_pending") {
+      if (restorePreviousAuthorization()) return;
       devicePending_ = false; device_.clear(); sessionLock_.unlock(); emit deviceAuthorization({}, {}); emit statusMessage("Twitch authorization was declined or expired. Connect again."); return;
     }
     deviceTimer_.start(int(std::max<qint64>(deviceInterval_, std::max<qint64>(0, authRetryAfter_ - QDateTime::currentSecsSinceEpoch()) * 1000)));
@@ -218,14 +274,23 @@ void TwitchService::validate(bool afterRefresh) {
     if (sentToken != access_) { validate(true); return; }
     if (status == 401 && !afterRefresh) { refreshToken(); return; }
     bool valid = status == 200 && data["client_id"].toString() == client_ && !data["user_id"].toString().isEmpty();
+    const bool upgrading = !upgradingUser_.isEmpty();
     const auto scopes = data["scopes"].toArray();
-    for (const auto &scope : requiredScopes()) valid = valid && scopes.contains(scope);
+    for (const auto &scope : upgrading ? authorizationScopes() : requiredScopes()) valid = valid && scopes.contains(scope);
+    if (upgrading && data["user_id"].toString() != upgradingUser_) valid = false;
     if (!valid) {
+      if (restorePreviousAuthorization()) return;
       const bool transient = status == 0 || status == 429 || status >= 500;
       endSession(!transient);
       emit statusMessage(transient ? "Twitch validation unavailable. Use Connect to retry saved credentials." : "Twitch authorization is invalid or lacks required permissions. Connect again.");
       return;
     }
+    if (upgrading) {
+      if (!saveTokens()) { restorePreviousAuthorization(); return; }
+      upgradingUser_.clear();
+    }
+    scopes_.clear();
+    for (const auto &scope : scopes) scopes_.insert(scope.toString());
     user_ = data["user_id"].toString(); login_ = data["login"].toString();
     const bool first = !online_; online_ = true;
     validateTimer_.start(60 * 60 * 1000);
@@ -244,6 +309,7 @@ void TwitchService::refreshToken() {
   oauth("token", {{"client_id", client_}, {"refresh_token", refresh_}, {"grant_type", "refresh_token"}}, [this](int status, QJsonObject data) {
     refreshing_ = false;
     if (status != 200) {
+      if (restorePreviousAuthorization()) return;
       const bool transient = status == 0 || status == 429 || status >= 500;
       endSession(!transient);
       emit statusMessage(transient ? "Twitch credentials could not be renewed. Wait, then use Connect to retry saved credentials." : "Twitch credentials expired or were revoked. Connect again."); return;
@@ -327,7 +393,9 @@ void TwitchService::sendChat(const QString &message) {
 }
 void TwitchService::scheduleReconnect() {
   if (!online_ || reconnectTimer_.isActive()) return;
+  ++eventGeneration_;
   emit chatStateChanged("Chat reconnecting; messages during the gap may be lost");
+  emit activityStateChanged("Activity feed reconnecting; events during the gap may be lost");
   const auto rateWait = std::max<qint64>(0, blockedUntil_.value("helix") - QDateTime::currentSecsSinceEpoch()) * 1000;
   reconnectTimer_.start(int(std::max<qint64>(socketBackoff_, rateWait)));
   socketBackoff_ = std::min(socketBackoff_ * 2, 60000);
@@ -364,6 +432,63 @@ void TwitchService::openSocket(const QUrl &url, bool transferred) {
     if (epoch == generation_ && ws == replacement_) { replacement_ = nullptr; ws->abort(); ws->deleteLater(); }
   });
 }
+void TwitchService::reportActivityState() {
+  QStringList active, unavailable;
+  for (const auto &type : activityTypes()) {
+    const auto state = activitySubscriptions_.value(type, "pending");
+    const auto label = type.mid(QString("channel.").size());
+    if (state == "active") active.append(label);
+    else unavailable.append(label + " (" + state + ")");
+  }
+  QString text = active.isEmpty() ? "Activity subscriptions connecting" : "Receiving " + active.join(", ");
+  if (!unavailable.isEmpty()) text += ". Unavailable: " + unavailable.join(", ");
+  if (!activityAuthorized()) text += ". Authorize activity feed to enable all events.";
+  emit activityStateChanged(text);
+}
+void TwitchService::subscribeChat(int attempt) {
+  if (!online_ || !socket_ || eventSession_.isEmpty()) return;
+  const auto epoch = generation_, eventEpoch = eventGeneration_;
+  api({"POST", "eventsub/subscriptions", {{"type", "channel.chat.message"}, {"version", "1"},
+    {"condition", QJsonObject{{"broadcaster_user_id", user_}, {"user_id", user_}}},
+    {"transport", QJsonObject{{"method", "websocket"}, {"session_id", eventSession_}}}},
+    [this, attempt, epoch, eventEpoch](int code, QJsonObject) {
+      if (epoch != generation_ || eventEpoch != eventGeneration_) return;
+      if (code == 202) { socketBackoff_ = 1000; emit chatStateChanged("Chat connected"); }
+      else if (code == 429 || code == 0 || code >= 500) {
+        emit chatStateChanged("Chat subscription retrying");
+        const auto rateWait = std::max<qint64>(0, blockedUntil_.value("helix") - QDateTime::currentSecsSinceEpoch()) * 1000;
+        const auto delay = int(std::max<qint64>(std::min(1000 * (1 << std::min(attempt, 6)), 60000), rateWait));
+        QTimer::singleShot(delay, this, [this, attempt, epoch, eventEpoch] {
+          if (epoch == generation_ && eventEpoch == eventGeneration_) subscribeChat(std::min(attempt + 1, 6));
+        });
+      } else emit chatStateChanged("Chat subscription denied. Disconnect and reconnect to retry.");
+    }});
+}
+void TwitchService::subscribeActivity(const QString &type, int attempt) {
+  if (!online_ || !socket_ || eventSession_.isEmpty()) return;
+  QJsonObject condition{{"broadcaster_user_id", user_}};
+  if (type == "channel.follow") condition["moderator_user_id"] = user_;
+  if (type == "channel.raid") condition = {{"to_broadcaster_user_id", user_}};
+  const auto session = eventSession_;
+  const auto epoch = generation_;
+  const auto eventEpoch = eventGeneration_;
+  api({"POST", "eventsub/subscriptions", {{"type", type}, {"version", type == "channel.follow" ? "2" : "1"},
+       {"condition", condition}, {"transport", QJsonObject{{"method", "websocket"}, {"session_id", session}}}},
+       [this, type, attempt, epoch, eventEpoch](int code, QJsonObject) {
+    if (epoch != generation_ || eventEpoch != eventGeneration_) return;
+    if (code == 202) activitySubscriptions_[type] = "active";
+    else if (code == 0 || code == 429 || code >= 500) {
+      activitySubscriptions_[type] = "retrying";
+      const auto rateWait = std::max<qint64>(0, blockedUntil_.value("helix") - QDateTime::currentSecsSinceEpoch()) * 1000;
+      const auto delay = int(std::max<qint64>(std::min(1000 * (1 << std::min(attempt, 6)), 60000), rateWait));
+      QTimer::singleShot(delay, this, [this, type, attempt, epoch, eventEpoch] {
+        if (epoch == generation_ && eventEpoch == eventGeneration_)
+          subscribeActivity(type, std::min(attempt + 1, 6));
+      });
+    } else activitySubscriptions_[type] = "denied";
+    reportActivityState();
+  }});
+}
 void TwitchService::handleEvent(QWebSocket *ws, bool transferred, const QString &text) {
   const auto root = QJsonDocument::fromJson(text.toUtf8()).object();
   const auto meta = root["metadata"].toObject(), payload = root["payload"].toObject();
@@ -380,26 +505,45 @@ void TwitchService::handleEvent(QWebSocket *ws, bool transferred, const QString 
     reconnectTimer_.stop();
     watchdog_.setInterval(std::clamp(session["keepalive_timeout_seconds"].toInt(10), 10, 600) * 1000 + 1000);
     watchdog_.start();
-    if (transferred) { socketBackoff_ = 1000; emit chatStateChanged("Chat connected"); return; }
-    api({"POST", "eventsub/subscriptions", {{"type", "channel.chat.message"}, {"version", "1"},
-      {"condition", QJsonObject{{"broadcaster_user_id", user_}, {"user_id", user_}}},
-      {"transport", QJsonObject{{"method", "websocket"}, {"session_id", id}}}},
-      [this, ws = QPointer<QWebSocket>(ws)](int code, QJsonObject) {
-        if (!ws || ws != socket_) return;
-        if (code == 202) { socketBackoff_ = 1000; emit chatStateChanged("Chat connected"); }
-        else if (code == 429 || code == 0 || code >= 500) { emit chatStateChanged("Chat subscription failed; reconnecting"); ws->abort(); }
-        else { ws->disconnect(this); ws->abort(); ws->deleteLater(); socket_ = nullptr; watchdog_.stop(); emit chatStateChanged("Chat subscription denied. Disconnect and reconnect to retry."); }
-      }});
+    if (transferred) {
+      socketBackoff_ = 1000;
+      eventSession_ = id;
+      emit chatStateChanged("Chat connected");
+      reportActivityState();
+      return;
+    }
+    eventSession_ = id;
+    activitySubscriptions_.clear();
+    subscribeChat();
+    for (const auto &activity : activityTypes()) {
+      const auto scope = activityScope(activity);
+      activitySubscriptions_[activity] = !scope.isEmpty() && !scopes_.contains(scope) ? "permission needed" : "pending";
+    }
+    reportActivityState();
+    for (const auto &activity : activityTypes())
+      if (activitySubscriptions_.value(activity) == "pending") subscribeActivity(activity);
   } else if (type == "session_keepalive" || type == "notification") {
     if (ws == socket_) watchdog_.start();
-    if (type != "notification" || meta["subscription_type"].toString() != "channel.chat.message") return;
+    if (type != "notification") return;
+    const auto subscriptionType = meta["subscription_type"].toString();
+    if (subscriptionType != "channel.chat.message" && !activitySubscriptions_.contains(subscriptionType)) return;
     const auto id = meta["message_id"].toString();
     if (id.isEmpty() || seenEvents_.contains(id)) return;
     seenEvents_.insert(id); eventIds_.enqueue(id);
     while (eventIds_.size() > 1000) seenEvents_.remove(eventIds_.dequeue());
     const auto event = payload["event"].toObject();
-    if (event["broadcaster_user_id"].toString() != user_) return;
-    emit chatReceived(event["chatter_user_name"].toString().left(100), event["message"].toObject()["text"].toString().left(2000));
+    const auto broadcaster = subscriptionType == "channel.raid" ? event["to_broadcaster_user_id"] : event["broadcaster_user_id"];
+    if (broadcaster.toString() != user_) return;
+    if (subscriptionType == "channel.chat.message") {
+      const auto message = event["message"].toObject();
+      emit chatReceived(event["chatter_user_name"].toString().left(100),
+                        message["text"].toString().left(2000), message["fragments"].toArray());
+    } else {
+      if (subscriptionType == "channel.subscribe" && event["is_gift"].toBool()) return;
+      auto timestamp = QDateTime::fromString(meta["message_timestamp"].toString(), Qt::ISODateWithMs);
+      if (!timestamp.isValid()) timestamp = QDateTime::currentDateTimeUtc();
+      emit activityReceived(subscriptionType, event, timestamp);
+    }
   } else if (type == "session_reconnect") {
     const QUrl url(session["reconnect_url"].toString());
     if (validReconnectUrl(url)) openSocket(url, true);
@@ -407,7 +551,13 @@ void TwitchService::handleEvent(QWebSocket *ws, bool transferred, const QString 
   } else if (type == "revocation") {
     const auto reason = payload["subscription"].toObject()["status"].toString();
     if (reason == "authorization_revoked" || reason == "user_removed") { endSession(true); emit statusMessage("Twitch authorization was revoked. Connect again."); }
-    else { ws->disconnect(this); ws->abort(); watchdog_.stop(); emit chatStateChanged("Chat subscription revoked. Reconnect your account to retry."); }
+    else {
+      const auto subscriptionType = payload["subscription"].toObject()["type"].toString();
+      if (activitySubscriptions_.contains(subscriptionType)) {
+        activitySubscriptions_[subscriptionType] = "denied";
+        reportActivityState();
+      } else emit chatStateChanged("Chat subscription revoked. Reconnect your account to retry.");
+    }
   }
 }
 } // namespace feathercast::twitch

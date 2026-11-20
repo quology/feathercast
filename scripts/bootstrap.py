@@ -18,6 +18,7 @@ DEPS = ROOT / "work/deps"
 QT_VERSION = "6.8.3"
 QT_SOURCE_SHA256 = "56001b905601bb9023d399f3ba780d7fa940f3e4861e496a7c490331f49e0b80"
 QT_WEBSOCKETS_SOURCE_SHA256 = "fc6310c1b12d6e22a31062727aa6574ed69239d036c8a4247b3b089902709b11"
+QT_IMAGEFORMATS_SOURCE_SHA256 = "049bfb99845e4801672aca07c3c4fc4c140f932a3a33faa899419579e33ef1c8"
 OBS_VERSION = "33.0.0"
 OBS_SOURCE_COMMIT = "02acc6a4cf08eba4ce2eab9342c5dd305b41e9e5"
 OBS_ZIP_SHA256 = "3369a3ecd67b5669a8a08d77357f87cc786d1fba42fbbd1054d841a69f6271a7"
@@ -67,17 +68,25 @@ def main():
         run([sys.executable, "-m", "aqt", "install-qt", "windows", "desktop", QT_VERSION, "win64_mingw", "--archives", "qtbase", "qttools", "--outputdir", DEPS / "Qt"])
     if not (qt / "lib/cmake/Qt6WebSockets/Qt6WebSocketsConfig.cmake").exists():
         run([sys.executable, "-m", "aqt", "install-qt", "windows", "desktop", QT_VERSION, "win64_mingw", "-m", "qtwebsockets", "--archives", "qtwebsockets", "--outputdir", DEPS / "Qt"])
+    if not (qt / "plugins/imageformats/qwebp.dll").exists():
+        run([sys.executable, "-m", "aqt", "install-qt", "windows", "desktop", QT_VERSION, "win64_mingw", "-m", "qtimageformats", "--archives", "qtimageformats", "--outputdir", DEPS / "Qt"])
     if not (compiler / "g++.exe").exists():
         run([sys.executable, "-m", "aqt", "install-tool", "windows", "desktop", "tools_mingw1310", "qt.tools.win64_mingw1310", "--outputdir", DEPS / "Qt"])
     qt_licenses = DEPS / "qt-source-licenses"
-    for module, digest in (("qtbase", QT_SOURCE_SHA256), ("qtwebsockets", QT_WEBSOCKETS_SOURCE_SHA256)):
+    qt_sources = (("qtbase", QT_SOURCE_SHA256),
+                  ("qtwebsockets", QT_WEBSOCKETS_SOURCE_SHA256),
+                  ("qtimageformats", QT_IMAGEFORMATS_SOURCE_SHA256))
+    for module, digest in qt_sources:
         source_name = f"{module}-everywhere-src-{QT_VERSION}"
         qt_source = DEPS / f"{source_name}.tar.xz"
         download(f"https://download.qt.io/archive/qt/6.8/{QT_VERSION}/submodules/{qt_source.name}", qt_source, digest)
-        if not (qt_licenses / source_name / "LICENSES").exists():
+        webp_notice = f"{source_name}/src/3rdparty/libwebp/COPYING"
+        licenses_missing = not (qt_licenses / source_name / "LICENSES").exists()
+        webp_notice_missing = module == "qtimageformats" and not (qt_licenses / webp_notice).exists()
+        if licenses_missing or webp_notice_missing:
             qt_licenses.mkdir(exist_ok=True)
             with tarfile.open(qt_source) as package:
-                members = [entry for entry in package.getmembers() if "/LICENSES/" in entry.name]
+                members = [entry for entry in package.getmembers() if "/LICENSES/" in entry.name or entry.name == webp_notice]
                 package.extractall(qt_licenses, members=members, filter="data")
 
     runtime = DEPS / "obs-runtime"

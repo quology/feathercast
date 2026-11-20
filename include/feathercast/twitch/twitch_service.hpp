@@ -2,6 +2,7 @@
 #include <QObject>
 #include <QDateTime>
 #include <QJsonObject>
+#include <QJsonArray>
 #include <QLockFile>
 #include <QNetworkAccessManager>
 #include <QPointer>
@@ -20,6 +21,7 @@ struct Endpoints {
   QUrl events{"wss://eventsub.wss.twitch.tv/ws"};
 };
 QStringList requiredScopes();
+QStringList authorizationScopes();
 bool validMetadata(const QString &title, const QStringList &tags);
 bool validReconnectUrl(const QUrl &url);
 QByteArray protectTokens(const QByteArray &plain);
@@ -33,9 +35,12 @@ public:
   ~TwitchService() override;
   bool connected() const { return online_; }
   QString clientId() const { return client_; }
+  QString userId() const { return user_; }
+  bool activityAuthorized() const;
   void restore();
   void connectAccount(const QString &publicClientId);
   void disconnectAccount();
+  void authorizeActivity();
   void searchCategories(const QString &query);
   void updateChannel(const QString &title, const QString &categoryId,
                      const QStringList &tags);
@@ -49,21 +54,23 @@ signals:
   void streamReceived(const QJsonObject &stream);
   void streamUnavailable();
   void categoriesReceived(const QJsonArray &categories);
-  void chatReceived(const QString &name, const QString &text);
+  void chatReceived(const QString &name, const QString &text, const QJsonArray &fragments);
+  void activityReceived(const QString &type, const QJsonObject &event, const QDateTime &timestamp);
+  void activityStateChanged(const QString &state);
   void chatStateChanged(const QString &state);
   void chatSendFinished(bool sent);
   void channelUpdateFinished(bool saved);
 private:
   using Callback = std::function<void(int, QJsonObject)>;
   struct Work { QByteArray method; QString path; QJsonObject body; Callback done; bool retried{}; };
-  QString path_, client_, access_, refresh_, user_, login_, device_;
+  QString path_, client_, access_, refresh_, user_, login_, device_, upgradingUser_;
   QLockFile sessionLock_;
   Endpoints endpoints_;
   QNetworkAccessManager network_;
   QSet<QNetworkReply *> replies_;
   QTimer deviceTimer_, validateTimer_, statusTimer_, watchdog_, reconnectTimer_;
   QDateTime deviceExpiry_;
-  int deviceInterval_{5000}, generation_{}, socketBackoff_{1000};
+  int deviceInterval_{5000}, generation_{}, eventGeneration_{}, socketBackoff_{1000};
   qint64 authRetryAfter_{};
   bool online_{}, refreshing_{}, validating_{}, devicePending_{};
   QQueue<Work> refreshQueue_;
@@ -71,6 +78,9 @@ private:
   QPointer<QWebSocket> socket_, replacement_;
   QQueue<QString> eventIds_;
   QSet<QString> seenEvents_;
+  QSet<QString> scopes_;
+  QHash<QString, QString> activitySubscriptions_;
+  QString eventSession_;
   void raw(const QByteArray &method, const QUrl &url, const QByteArray &body,
            const QByteArray &contentType, bool auth, Callback done);
   void oauth(const QString &endpoint, const QMap<QString, QString> &form, Callback done);
@@ -81,8 +91,13 @@ private:
   bool saveTokens();
   void endSession(bool erase);
   void pollDevice();
+  void beginAuthorization(const QString &id);
+  bool restorePreviousAuthorization();
   void openSocket(const QUrl &url, bool transferred = false);
   void handleEvent(QWebSocket *socket, bool transferred, const QString &message);
   void scheduleReconnect();
+  void subscribeActivity(const QString &type, int attempt = 0);
+  void subscribeChat(int attempt = 0);
+  void reportActivityState();
 };
 } // namespace feathercast::twitch

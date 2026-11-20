@@ -6,7 +6,7 @@ VELA (Video Encoding and Livestreaming Application), formerly FeatherCast, is a 
 
 - Dockable scenes/sources, real capture/device options, volume/mute and actual libobs audio peak meters.
 - Optional application-only audio for display/window/game capture. Advanced Audio Properties controls gain, mono, balance, sync, monitoring and six independent recording tracks.
-- Twitch account connection, channel title/category/tag editing, live status, and a dockable text chat. See the [Twitch setup guide](docs/TWITCH.md).
+- Four native Twitch docks for stream information, live stats, activity, and chat with optional BetterTTV and FrankerFaceZ emotes. See the [Twitch setup guide](docs/TWITCH.md).
 - Shared H.264/AAC encoders for independent streaming, MKV recording and replay; simultaneous outputs tested separately with x264 and RTX 4070 NVENC.
 - Live 0–300 second packet delay with bounded memory and keyframe cuts. Increasing delay holds output and can time out ingest; decreasing it intentionally removes content. Effective delay is approximate.
 - Visual priority automation with OR-of-AND conditions, ordered actions, debounce, cooldown, manual override, fallback and transactional JSON import/export. Process snapshots poll every 500 ms.

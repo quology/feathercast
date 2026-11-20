@@ -1,9 +1,36 @@
 #include "feathercast/ui/twitch_docks.hpp"
+#include "feathercast/ui/twitch_chat_history.hpp"
 #include "feathercast/twitch/twitch_service.hpp"
 #include <QtWidgets>
 #include <QJsonArray>
+#include <algorithm>
 
 namespace feathercast::ui {
+namespace {
+QString activityDetail(const QString &type, const QJsonObject &event) {
+  QString name = event["user_name"].toString().left(100);
+  if (name.isEmpty() || event["is_anonymous"].toBool()) name = "Anonymous";
+  if (type == "channel.follow") return name + " followed";
+  if (type == "channel.subscribe") return name + " subscribed";
+  if (type == "channel.subscription.message")
+    return name + QString(" resubscribed for %1 months").arg(event["cumulative_months"].toInt());
+  if (type == "channel.subscription.gift")
+    return name + QString(" gifted %1 subscriptions").arg(event["total"].toInt());
+  if (type == "channel.cheer")
+    return name + QString(" cheered %1 Bits").arg(event["bits"].toInt());
+  return event["from_broadcaster_user_name"].toString().left(100) +
+      QString(" raided with %1 viewers").arg(event["viewers"].toInt());
+}
+QString activityLabel(const QString &type) {
+  if (type == "channel.follow") return "Follow";
+  if (type == "channel.subscribe") return "Subscription";
+  if (type == "channel.subscription.message") return "Resubscription";
+  if (type == "channel.subscription.gift") return "Gift";
+  if (type == "channel.cheer") return "Cheer";
+  return "Raid";
+}
+}
+
 void installTwitchDocks(QMainWindow *window, const QString &directory) {
   auto *service = new twitch::TwitchService(directory, window);
   auto *info = new QWidget;
@@ -42,35 +69,70 @@ void installTwitchDocks(QMainWindow *window, const QString &directory) {
   });
   QObject::connect(disconnectButton, &QPushButton::clicked, service, &twitch::TwitchService::disconnectAccount);
   QObject::connect(service, &twitch::TwitchService::statusMessage, feedback, &QLabel::setText);
-  auto *live = new QLabel("Twitch status unavailable"); live->setTextFormat(Qt::PlainText); live->setWordWrap(true); layout->addWidget(live);
+  auto *stats = new QWidget;
+  auto *statsLayout = new QVBoxLayout(stats);
+  auto *metrics = new QFormLayout;
+  auto *live = new QLabel("Disconnected");
+  auto *viewers = new QLabel("—");
+  auto *uptime = new QLabel("—");
+  auto *lastUpdated = new QLabel("—");
+  live->setObjectName("twitchStreamStatus");
+  viewers->setObjectName("twitchViewerCount");
+  uptime->setObjectName("twitchUptime");
+  for (auto *metric : {live, viewers, uptime, lastUpdated}) metric->setTextFormat(Qt::PlainText);
+  metrics->addRow("Status", live);
+  metrics->addRow("Viewers", viewers);
+  metrics->addRow("Uptime", uptime);
+  metrics->addRow("Last updated", lastUpdated);
+  statsLayout->addLayout(metrics);
+  auto *refreshStats = new QPushButton("Refresh");
+  statsLayout->addWidget(refreshStats); statsLayout->addStretch();
+  QObject::connect(refreshStats, &QPushButton::clicked, service, &twitch::TwitchService::pollStatus);
+  auto *statsDock = new QDockWidget("Twitch Stats", window);
+  statsDock->setObjectName("Twitch stats"); statsDock->setWidget(stats);
+  window->addDockWidget(Qt::RightDockWidgetArea, statsDock);
   auto started = std::make_shared<QDateTime>();
-  auto viewers = std::make_shared<int>(0);
-  auto isLive = std::make_shared<bool>(false);
-  auto *clock = new QTimer(info); clock->setInterval(1000);
-  auto updateLive = [live, started, viewers, isLive] {
-    if (!*isLive) { live->setText("Offline · 0 viewers · uptime —"); return; }
+  auto *clock = new QTimer(stats);
+  clock->setInterval(1000);
+  const auto updateUptime = [uptime, started] {
     const auto seconds = std::max<qint64>(0, started->secsTo(QDateTime::currentDateTimeUtc()));
-    live->setText(QString("LIVE · %1 viewers · uptime %2:%3:%4").arg(*viewers)
-      .arg(seconds / 3600, 2, 10, QChar('0')).arg(seconds / 60 % 60, 2, 10, QChar('0')).arg(seconds % 60, 2, 10, QChar('0')));
+    uptime->setText(QString("%1:%2:%3").arg(seconds / 3600, 2, 10, QChar('0'))
+        .arg(seconds / 60 % 60, 2, 10, QChar('0')).arg(seconds % 60, 2, 10, QChar('0')));
   };
-  QObject::connect(clock, &QTimer::timeout, info, updateLive);
-  QObject::connect(service, &twitch::TwitchService::streamUnavailable, info, [clock, live] { clock->stop(); live->setText("Twitch status unavailable · waiting for next update"); });
-  QObject::connect(service, &twitch::TwitchService::streamReceived, info, [started, viewers, isLive, clock, updateLive](const QJsonObject &o) {
-    *isLive = !o.isEmpty(); *viewers = o["viewer_count"].toInt(); *started = QDateTime::fromString(o["started_at"].toString(), Qt::ISODate);
-    updateLive(); clock->start();
+  const auto resetStats = [=](const QString &state) {
+    clock->stop();
+    live->setText(state);
+    viewers->setText("—");
+    uptime->setText("—");
+    lastUpdated->setText("—");
+  };
+  QObject::connect(clock, &QTimer::timeout, stats, updateUptime);
+  QObject::connect(service, &twitch::TwitchService::streamUnavailable, stats, [resetStats] { resetStats("Unavailable"); });
+  QObject::connect(service, &twitch::TwitchService::streamReceived, stats, [=](const QJsonObject &stream) {
+    const bool isLive = !stream.isEmpty();
+    live->setText(isLive ? "Live" : "Offline");
+    viewers->setText(QLocale().toString(stream["viewer_count"].toInt()));
+    lastUpdated->setText(QLocale().toString(QTime::currentTime(), QLocale::ShortFormat));
+    *started = QDateTime::fromString(stream["started_at"].toString(), Qt::ISODate);
+    if (isLive && started->isValid()) {
+      updateUptime();
+      clock->start();
+    } else {
+      clock->stop();
+      uptime->setText("—");
+    }
   });
   auto *editor = new QWidget; auto *form = new QFormLayout(editor); form->setContentsMargins(0, 0, 0, 0);
   auto *title = new QLineEdit; title->setObjectName("twitchTitle"); title->setAccessibleName("Twitch stream title");
   auto *searchRow = new QWidget; auto *searchLayout = new QHBoxLayout(searchRow); searchLayout->setContentsMargins(0, 0, 0, 0);
   auto *query = new QLineEdit; query->setAccessibleName("Twitch category search"); query->setPlaceholderText("Search category");
   auto *search = new QPushButton("Search"); searchLayout->addWidget(query); searchLayout->addWidget(search);
-  auto *categories = new QComboBox; categories->setAccessibleName("Twitch category"); categories->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+  auto *categories = new QComboBox; categories->setObjectName("twitchCategory"); categories->setAccessibleName("Twitch category"); categories->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
   auto *tags = new QLineEdit; tags->setObjectName("twitchTags"); tags->setAccessibleName("Twitch tags, separated by commas"); tags->setPlaceholderText("Up to 10 tags, comma separated");
   form->addRow("Title", title); form->addRow("Category", searchRow); form->addRow("Selection", categories); form->addRow("Tags", tags);
   layout->addWidget(editor);
   auto *save = new QPushButton("Save channel information"); layout->addWidget(save);
-  auto *note = new QLabel("Changes are sent only when you click Save. Twitch status updates every 30 seconds. Connecting does not start a broadcast.");
-  note->setWordWrap(true); layout->addWidget(note); layout->addStretch();
+  layout->addStretch();
   auto dirty = std::make_shared<bool>(false);
   QObject::connect(title, &QLineEdit::textEdited, info, [dirty] { *dirty = true; });
   QObject::connect(tags, &QLineEdit::textEdited, info, [dirty] { *dirty = true; });
@@ -99,21 +161,31 @@ void installTwitchDocks(QMainWindow *window, const QString &directory) {
   QObject::connect(service, &twitch::TwitchService::channelUpdateFinished, info, [save, editor, dirty, service](bool saved) {
     save->setEnabled(service->connected()); editor->setEnabled(service->connected()); if (saved) *dirty = false;
   });
-  auto *infoDock = new QDockWidget("Twitch channel", window); infoDock->setObjectName("Twitch channel"); infoDock->setWidget(info);
+  auto *infoDock = new QDockWidget("Stream Information", window); infoDock->setObjectName("Twitch channel"); infoDock->setWidget(info);
   window->addDockWidget(Qt::RightDockWidgetArea, infoDock);
 
   auto *chat = new QWidget; auto *chatLayout = new QVBoxLayout(chat);
   auto *chatState = new QLabel("Chat disconnected"); chatState->setTextFormat(Qt::PlainText); chatState->setWordWrap(true); chatLayout->addWidget(chatState);
   auto *chatFeedback = new QLabel; chatFeedback->setTextFormat(Qt::PlainText); chatFeedback->setWordWrap(true); chatLayout->addWidget(chatFeedback);
   QObject::connect(service, &twitch::TwitchService::statusMessage, chatFeedback, &QLabel::setText);
-  auto *messages = new QPlainTextEdit; messages->setObjectName("twitchChatHistory"); messages->setAccessibleName("Twitch chat history");
-  messages->setReadOnly(true); messages->setMaximumBlockCount(500); chatLayout->addWidget(messages, 1);
+  auto *addOns = new QComboBox;
+  addOns->setObjectName("twitchChatAddOns");
+  addOns->setAccessibleName("Twitch chat add-ons");
+  addOns->addItems({"None", "BetterTTV", "FrankerFaceZ", "BetterTTV and FrankerFaceZ"});
+  addOns->setCurrentIndex(std::clamp(settings.value("twitch/chatAddOns", 0).toInt(), 0, 3));
+  auto *addOnRow = new QFormLayout; addOnRow->addRow("Chat add-ons", addOns); chatLayout->addLayout(addOnRow);
+  auto *messages = new TwitchChatHistory; messages->setObjectName("twitchChatHistory"); messages->setAccessibleName("Twitch chat history");
+  chatLayout->addWidget(messages, 1);
+  messages->setAddOns(addOns->currentIndex() & 1, addOns->currentIndex() & 2);
+  QObject::connect(addOns, &QComboBox::currentIndexChanged, chat, [messages, directory](int index) {
+    QSettings settings(directory + "/ui.ini", QSettings::IniFormat);
+    settings.setValue("twitch/chatAddOns", index);
+    messages->setAddOns(index & 1, index & 2);
+  });
   auto *compose = new QLineEdit; compose->setObjectName("twitchChatMessage"); compose->setAccessibleName("Twitch chat message"); compose->setPlaceholderText("Message your Twitch chat");
   auto *send = new QPushButton("Send"); auto *composeRow = new QHBoxLayout; composeRow->addWidget(compose, 1); composeRow->addWidget(send); chatLayout->addLayout(composeRow);
   QObject::connect(service, &twitch::TwitchService::chatStateChanged, chatState, &QLabel::setText);
-  QObject::connect(service, &twitch::TwitchService::chatReceived, messages, [messages](const QString &name, QString text) {
-    text.replace('\n', ' '); text.replace('\r', ' '); messages->appendPlainText(name + ": " + text);
-  });
+  QObject::connect(service, &twitch::TwitchService::chatReceived, messages, &TwitchChatHistory::appendMessage);
   QObject::connect(send, &QPushButton::clicked, chat, [service, compose, send] { send->setEnabled(false); compose->setEnabled(false); service->sendChat(compose->text()); });
   QObject::connect(compose, &QLineEdit::returnPressed, send, &QPushButton::click);
   QObject::connect(service, &twitch::TwitchService::chatSendFinished, chat, [compose, send, service, chatFeedback](bool sent) {
@@ -121,20 +193,59 @@ void installTwitchDocks(QMainWindow *window, const QString &directory) {
     compose->setEnabled(service->connected()); send->setEnabled(service->connected());
     if (sent) compose->setFocus();
   });
-  auto *chatDock = new QDockWidget("Twitch chat", window); chatDock->setObjectName("Twitch chat"); chatDock->setWidget(chat);
+  auto *chatDock = new QDockWidget("Twitch Chat", window); chatDock->setObjectName("Twitch chat"); chatDock->setWidget(chat);
   window->addDockWidget(Qt::RightDockWidgetArea, chatDock);
-  window->tabifyDockWidget(infoDock, chatDock); infoDock->raise();
+  window->tabifyDockWidget(infoDock, statsDock);
+  window->tabifyDockWidget(infoDock, chatDock);
+  auto *activity = new QWidget;
+  auto *activityLayout = new QVBoxLayout(activity);
+  auto *activityState = new QLabel("Activity feed disconnected");
+  activityState->setObjectName("twitchActivityState"); activityState->setTextFormat(Qt::PlainText); activityState->setWordWrap(true);
+  activityLayout->addWidget(activityState);
+  auto *authorizeActivity = new QPushButton("Authorize activity feed");
+  activityLayout->addWidget(authorizeActivity); authorizeActivity->hide();
+  QObject::connect(authorizeActivity, &QPushButton::clicked, infoDock, [infoDock, service] {
+    infoDock->show();
+    infoDock->raise();
+    service->authorizeActivity();
+  });
+  QObject::connect(service, &twitch::TwitchService::activityStateChanged, activityState, &QLabel::setText);
+  auto *events = new QTreeWidget;
+  events->setObjectName("twitchActivityHistory"); events->setAccessibleName("Twitch activity feed");
+  events->setColumnCount(3); events->setHeaderLabels({"Time", "Event", "Details"});
+  events->setRootIsDecorated(false); events->setAlternatingRowColors(true);
+  events->header()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+  events->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+  events->header()->setSectionResizeMode(2, QHeaderView::Stretch);
+  activityLayout->addWidget(events, 1);
+  auto *clearEvents = new QPushButton("Clear"); activityLayout->addWidget(clearEvents);
+  QObject::connect(clearEvents, &QPushButton::clicked, events, &QTreeWidget::clear);
+  QObject::connect(service, &twitch::TwitchService::activityReceived, events,
+      [events](const QString &type, const QJsonObject &event, const QDateTime &timestamp) {
+    auto *item = new QTreeWidgetItem({timestamp.toLocalTime().toString("HH:mm:ss"), activityLabel(type), activityDetail(type, event)});
+    item->setToolTip(2, item->text(2)); events->insertTopLevelItem(0, item);
+    while (events->topLevelItemCount() > 200) delete events->takeTopLevelItem(events->topLevelItemCount() - 1);
+  });
+  auto *activityDock = new QDockWidget("Twitch Activity Feed", window);
+  activityDock->setObjectName("Twitch activity"); activityDock->setWidget(activity);
+  window->addDockWidget(Qt::RightDockWidgetArea, activityDock);
+  window->tabifyDockWidget(infoDock, activityDock); infoDock->raise();
   QObject::connect(service, &twitch::TwitchService::connectionChanged, info,
       [=](bool connected, const QString &name) {
+    messages->setChannel(connected ? service->userId() : QString{});
+    refreshStats->setEnabled(connected);
+    resetStats(connected ? "Checking Twitch…" : "Disconnected");
+    authorizeActivity->setVisible(connected && !service->activityAuthorized());
     account->setText(connected ? "Connected as " + name : "No Twitch account connected");
     connectButton->setEnabled(!connected); client->setEnabled(!connected);
     editor->setEnabled(connected); save->setEnabled(connected); compose->setEnabled(connected); send->setEnabled(connected);
     authorization->clear(); openAuth->hide();
-    if (!connected) { *dirty = false; title->clear(); tags->clear(); categories->clear(); messages->clear(); compose->clear(); clock->stop(); live->setText("Twitch status unavailable"); }
+    if (!connected) { *dirty = false; title->clear(); tags->clear(); categories->clear(); messages->clear(); events->clear(); compose->clear(); }
   });
   editor->setEnabled(false); save->setEnabled(false); compose->setEnabled(false); send->setEnabled(false);
   // New optional docks start hidden; View menu and persisted main-window state control them.
-  infoDock->hide(); chatDock->hide();
+  infoDock->hide(); chatDock->hide(); statsDock->hide(); activityDock->hide();
+  refreshStats->setEnabled(false);
   QTimer::singleShot(0, service, &twitch::TwitchService::restore);
 }
 } // namespace feathercast::ui

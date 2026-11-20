@@ -54,14 +54,28 @@ def main():
         shutil.copy2(plugins[0], stage / "plugins" / plugins[0].name)
     deploy = Path(manifest["qt_prefix"]) / "bin/windeployqt.exe"
     deploy_env = dict(os.environ, PATH=str(deploy.parent) + os.pathsep + manifest["compiler_bin"] + os.pathsep + os.environ.get("PATH", ""))
-    subprocess.run([str(deploy), "--release" if args.configuration == "Release" else "--debug", "--compiler-runtime", "--no-translations", "--no-opengl-sw", str(stage / "VELA.exe")], check=True, env=deploy_env)
     cache = (build / "CMakeCache.txt").read_text(encoding="utf-8")
     twitch_option = next((line.partition("=")[2] for line in cache.splitlines()
                           if line.startswith("FEATHERCAST_TWITCH:BOOL=")), "")
     twitch_enabled = twitch_option.upper() in {"1", "ON", "YES", "TRUE", "Y"}
+    excluded = ["qicns", "qtga", "qtiff", "qwbmp"]
+    if not twitch_enabled:
+        excluded.append("qwebp")
+    subprocess.run([str(deploy), "--release" if args.configuration == "Release" else "--debug",
+                    "--compiler-runtime", "--no-translations", "--no-opengl-sw",
+                    "--exclude-plugins", ",".join(excluded), str(stage / "VELA.exe")],
+                   check=True, env=deploy_env)
     if twitch_enabled:
         debug_suffix = "d" if args.configuration == "Debug" else ""
-        for dependency in (f"Qt6Network{debug_suffix}.dll", f"Qt6WebSockets{debug_suffix}.dll", f"tls/qschannelbackend{debug_suffix}.dll"):
+        for format_plugin in ("qgif", "qwebp"):
+            relative = f"imageformats/{format_plugin}{debug_suffix}.dll"
+            plugin = Path(manifest["qt_prefix"]) / "plugins" / relative
+            if plugin.is_file():
+                (stage / "imageformats").mkdir(exist_ok=True)
+                shutil.copy2(plugin, stage / relative)
+        for dependency in (f"Qt6Network{debug_suffix}.dll", f"Qt6WebSockets{debug_suffix}.dll",
+                           f"tls/qschannelbackend{debug_suffix}.dll", f"imageformats/qgif{debug_suffix}.dll",
+                           f"imageformats/qwebp{debug_suffix}.dll"):
             if not (stage / dependency).is_file():
                 raise SystemExit(f"Twitch runtime dependency missing from staged package: {dependency}")
     # windeployqt's toolchain detection is not guaranteed outside Qt Creator.
@@ -91,6 +105,12 @@ def main():
         if not websockets_licenses.is_dir():
             raise SystemExit("Qt WebSockets license inventory missing: rerun scripts/bootstrap.py before packaging.")
         shutil.copytree(websockets_licenses, notices / "Qt-WebSockets-source-licenses")
+        imageformats_source = ROOT / f'work/deps/qt-source-licenses/qtimageformats-everywhere-src-{manifest["qt"]}'
+        webp_license = imageformats_source / "src/3rdparty/libwebp/COPYING"
+        if not (imageformats_source / "LICENSES").is_dir() or not webp_license.is_file():
+            raise SystemExit("Qt Image Formats license inventory missing: rerun scripts/bootstrap.py before packaging.")
+        shutil.copytree(imageformats_source / "LICENSES", notices / "Qt-Image-Formats-source-licenses")
+        shutil.copy2(webp_license, notices / "libwebp-COPYING.txt")
     shutil.copytree(Path(manifest["qt_prefix"]) / "sbom", notices / "Qt-SPDX")
     archive_path = ROOT / "outputs" / f"{name}.zip"
     archive_path.parent.mkdir(exist_ok=True)

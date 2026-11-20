@@ -1,5 +1,13 @@
 # Verified test results
 
+## Twitch docks and chat add-ons — 20 November 2026
+
+- Windows Release built successfully and CTest passed 6/6. The desktop fixture exercised all four docks, live and offline stats, bounded chat and activity history, and resizing and floating.
+- Local OAuth and EventSub fixtures verified independent subscription recovery, event deduplication, and preserving the saved account through declined, incomplete, and wrong-account permission upgrades.
+- The Windows package included Qt's GIF and WebP plug-ins. The isolated packaged-runtime fixture rendered Twitch, BetterTTV, and FrankerFaceZ assets, advanced both GIF and WebP animations, and copied the original emote names. Public provider catalog and CDN responses were sampled without logging in.
+- The packaged Windows app passed all 12 integrated checks with a fresh dark-theme profile. The extra light-theme run did not complete. The updated package opened a responsive VELA window.
+- Live account authorization, channel activity and chat require a signed-in Twitch account. The fixtures used synthetic credentials and messages.
+
 ## Twitch integration and VELA branding — 19 November 2026
 
 - The Windows Release build produced `VELA.exe` with the VELA icon and product metadata. CTest passed 5/5. The main window passed all 12 integrated checks in each theme. The header and icon were inspected in the running app.
