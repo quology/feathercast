@@ -1,3 +1,9 @@
+# GitHub upload checkpoint — 20 November 2026
+
+20 November 2026 upload checkpoint: all 10 assets are uploaded to the [GitHub draft prerelease](https://github.com/quology/feathercast/releases/tag/untagged-ce2b97f317b0f2cdf7e1) (release ID `452459423`, intended tag `v0.1.0-dev.4-workspace-r1`). GitHub API verification confirmed `draft=true`, `prerelease=true`, and exact target `3d6208699fb57ebc54c40299f0a85418d7aafca5`. All asset sizes and GitHub SHA-256 digests match the local files; the Windows ZIP downloaded from GitHub also matched SHA-256 `b3efc80cf3e0962bd31d9808d0864e0b28d074e599ef3cc45751205852b61516`. The own-source ZIP was created from that exact target and has SHA-256 `09ed0872feb6c967f905f14c3f5fd22f114051315434d58fcd7a114fd541a62f`. Application source remains the validated `4dcf30f` checkpoint. The upload request supersedes the 19 November local-only distribution decision for this upload; the release remains a draft. See [remaining public-release work](docs/RELEASE_READINESS.md).
+
+The dated 19 November checkpoint below records the earlier distribution decision. Repository visibility is unchanged; public-release source and notice work remains open.
+
 # Current workspace checkpoint — 19 November 2026
 
 Source `4dcf30f` on `codex/obs-workspace-features` is frozen. Release build/CTest 5/5, native coordinate 9/9, hidden workspace UI 14/14 and restart 4/4 passed. Current source [CI passed](https://github.com/quology/feathercast/actions/runs/44560702657); Final artifact checksums/report are in `outputs/VELA-workspace-verification.md`. Distribution is local only; the user confirmed local-only binary distribution. No virtual camera is included. Actual capture, authenticated Twitch behavior, physical monitoring and broad performance comparison remain manual/unverified. Portable package preparation is recorded in `work/workspace-delivery-handoff.md`.
