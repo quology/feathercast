@@ -1,0 +1,5 @@
+<RCC>
+  <qresource prefix="/vela">
+    <file>vela.ico</file>
+  </qresource>
+</RCC>

@@ -1,4 +1,4 @@
-# Building FeatherCast
+# Building VELA
 
 Target: Windows 11 x64. Python 3.12+, Git and network access are required for the
 first build. Dependencies install inside `work/`; no administrator access or
@@ -16,6 +16,10 @@ bundled Python interpreter works too. `work/deps/manifest.json` records resolved
 paths. Bootstrap pins Qt 6.8.3, MinGW 13.1, OBS 33.0.0 and the public FFmpeg 8.x ABI
 headers; OBS and FFmpeg source/runtime downloads are SHA-256 checked. Qt archives
 are installed through pinned aqtinstall using the Qt repository's metadata checks.
+Twitch support uses Qt Network, Qt WebSockets, and Qt's GIF/WebP image plug-ins
+for chat. Rerun bootstrap to add WebSockets and Qt Image Formats to an existing kit.
+A custom desktop build can set
+`-DFEATHERCAST_TWITCH=OFF` to omit the integration.
 The OBS binary runtime currently reports FFmpeg n8.1.2; public structure ABI majors
 62/62/60 are compatible with the pinned 8.0 headers.
 

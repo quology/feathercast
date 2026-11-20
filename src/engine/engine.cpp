@@ -386,7 +386,7 @@ Engine::~Engine() { shutdown(); }
 QJsonObject Engine::defaultSettings() {
     return {{"width", 1280}, {"height", 720}, {"fps", 60}, {"encoder", "auto"},
         {"videoBitrateKbps", 6000}, {"audioBitrateKbps", 160}, {"keyframeSeconds", 2},
-        {"outputDirectory", QStandardPaths::writableLocation(QStandardPaths::MoviesLocation) + "/FeatherCast"},
+        {"outputDirectory", QStandardPaths::writableLocation(QStandardPaths::MoviesLocation) + "/VELA"},
         {"streamEndpoint", ""}, {"delayMs", 0}, {"delayMemoryMb", 256},
         {"replaySeconds", 30}, {"replayMemoryMb", 256}, {"previewEnabled", true}, {"replayEnabled", true}, {"pluginsEnabled", true}};
 }

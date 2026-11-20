@@ -1,6 +1,6 @@
-# FeatherCast architecture
+# VELA architecture
 
-FeatherCast owns a libobs process, capture graph, encoders, outputs and Qt interface. It does not automate a separately running OBS Studio. This document distinguishes the implemented portable core from application integrations, which must be verified separately. Research and source links are in [docs/RESEARCH.md](docs/RESEARCH.md).
+VELA owns a libobs process, capture graph, encoders, outputs and Qt interface. It does not automate a separately running OBS Studio. This document distinguishes the implemented portable core from application integrations, which must be verified separately. Research and source links are in [docs/RESEARCH.md](docs/RESEARCH.md).
 
 ## Boundaries and ownership
 
